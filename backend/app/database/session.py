@@ -27,10 +27,11 @@ Base = declarative_base()
 def ensure_schema_columns(target_engine):
     """
     Safely adds newly added columns to existing tables without dropping user data.
-    Works across both SQLite and PostgreSQL.
+    Works across both SQLite and PostgreSQL (Neon).
     """
     inspector = inspect(target_engine)
     existing_tables = inspector.get_table_names()
+    json_type = "JSON" if target_engine.dialect.name == "postgresql" else "TEXT"
 
     migrations = {
         "learning_profiles": [
@@ -40,14 +41,14 @@ def ensure_schema_columns(target_engine):
             ("session_id", "INTEGER"),
             ("repetition_required", "BOOLEAN DEFAULT FALSE"),
             ("repetition_success_count", "INTEGER DEFAULT 0"),
-            ("repetition_history_json", "TEXT"),
+            ("repetition_history_json", json_type),
             ("item_completed", "BOOLEAN DEFAULT FALSE"),
         ],
         "word_items": [
             ("content_uid", "VARCHAR(120)"),
             ("mode", "VARCHAR(50)"),
             ("normalized_english", "VARCHAR(255)"),
-            ("valid_alternatives_json", "TEXT"),
+            ("valid_alternatives_json", json_type),
         ],
     }
 

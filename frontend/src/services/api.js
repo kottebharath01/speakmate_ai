@@ -1,7 +1,12 @@
 import axios from 'axios';
 import { getLocalDateString } from '../utils/dateUtils';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+// Normalize VITE_API_URL so missing '/api' or trailing slashes never cause 404s
+let rawApiUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000/api').trim().replace(/\/+$/, '');
+if (!rawApiUrl.endsWith('/api')) {
+  rawApiUrl = `${rawApiUrl}/api`;
+}
+const API_BASE_URL = rawApiUrl;
 
 const api = axios.create({
   baseURL: API_BASE_URL,
