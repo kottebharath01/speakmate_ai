@@ -3,8 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.database.session import engine, Base, SessionLocal
 from app.database.seed_data import seed_database
+from app.database.seed_words_expressions import seed_words_expressions
 from app.api import (
-    auth, profile, situations, ai, learning, progress, interview
+    auth, profile, situations, ai, learning, progress, interview, words_expressions
 )
 
 # Create tables
@@ -13,6 +14,7 @@ Base.metadata.create_all(bind=engine)
 # Seed initial data
 with SessionLocal() as db:
     seed_database(db)
+    seed_words_expressions(db)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -39,6 +41,7 @@ app.include_router(ai.router, prefix=settings.API_V1_STR)
 app.include_router(learning.router, prefix=settings.API_V1_STR)
 app.include_router(progress.router, prefix=settings.API_V1_STR)
 app.include_router(interview.router, prefix=settings.API_V1_STR)
+app.include_router(words_expressions.router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 def root():

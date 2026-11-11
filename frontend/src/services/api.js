@@ -65,4 +65,18 @@ export const profileAPI = {
   update: (data) => api.put('/profile', data),
 };
 
+export const wordsExpressionsAPI = {
+  getItems: (params) => api.get('/words-expressions/items', { params }),
+  getItem: (id) => api.get(`/words-expressions/items/${id}`),
+  getCategories: (section) => api.get('/words-expressions/categories', { params: { section } }),
+  getDailyFeatured: () => api.get('/words-expressions/daily-featured'),
+  getRandom: (section) => api.get('/words-expressions/random', { params: { section } }),
+  toggleBookmark: (id) => api.post(`/words-expressions/items/${id}/bookmark`),
+  toggleLearned: (id) => api.post(`/words-expressions/items/${id}/mark-learned`),
+  getProgress: () => api.get('/words-expressions/progress'),
+  getExercises: (section, limit) => api.get('/words-expressions/exercises', { params: { section, limit } }),
+  checkExercise: (data) => api.post('/words-expressions/check-exercise', data),
+  checkSentence: (data) => api.post('/words-expressions/check-sentence', data),
+};
+
 export default api;

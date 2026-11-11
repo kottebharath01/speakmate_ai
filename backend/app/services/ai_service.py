@@ -23,8 +23,10 @@ class AIService:
 
     async def _query_ollama(self, prompt: str, system: str = TUTOR_SYSTEM_PROMPT) -> Optional[str]:
         """Attempt to call local Ollama server if available."""
+        if self.provider != "ollama":
+            return None
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=2.5) as client:
                 payload = {
                     "model": self.model,
                     "prompt": prompt,

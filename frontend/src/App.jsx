@@ -11,6 +11,7 @@ import { ConversationRoom } from './pages/ConversationRoom';
 import { GrammarAcademy } from './pages/GrammarAcademy';
 import { SentencePatterns } from './pages/SentencePatterns';
 import { VocabularyTrainer } from './pages/VocabularyTrainer';
+import { WordsExpressions } from './pages/WordsExpressions/WordsExpressions';
 import { InterviewPrep } from './pages/InterviewPrep';
 import { DailyChallenges } from './pages/DailyChallenges';
 import { MistakeJournal } from './pages/MistakeJournal';
@@ -59,6 +60,14 @@ export default function App() {
               element={
                 <MainLayout>
                   <SituationPractice />
+                </MainLayout>
+              }
+            />
+            <Route
+              path="/words-expressions"
+              element={
+                <MainLayout>
+                  <WordsExpressions />
                 </MainLayout>
               }
             />

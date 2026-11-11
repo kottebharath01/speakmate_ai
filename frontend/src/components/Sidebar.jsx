@@ -3,12 +3,13 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, MessageSquareText, MessagesSquare, BookOpen,
   Boxes, BookMarked, Briefcase, CalendarCheck, AlertOctagon,
-  TrendingUp, Settings
+  TrendingUp, Settings, Languages
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/situations', label: 'Situation Practice', icon: MessageSquareText, highlight: true },
+  { to: '/words-expressions', label: 'Words & Expressions', icon: Languages, highlight: true },
   { to: '/conversation', label: 'AI Conversation Room', icon: MessagesSquare },
   { to: '/grammar', label: 'Grammar Academy', icon: BookOpen },
   { to: '/patterns', label: 'Sentence Patterns', icon: Boxes },
