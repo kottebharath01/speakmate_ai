@@ -22,6 +22,7 @@ export function FeedbackCard({
   const {
     isListening,
     transcript,
+    setTranscript,
     startListening,
     stopListening,
     resetTranscript,
@@ -264,7 +265,7 @@ export function FeedbackCard({
                   value={transcript || repeatText}
                   onChange={(e) => {
                     setRepeatText(e.target.value);
-                    if (transcript) resetTranscript();
+                    setTranscript(e.target.value);
                   }}
                   placeholder={`Repeat corrected sentence (${repsDoneCount + 1}/${repetitionsRequired})...`}
                   disabled={isEvaluatingRepeat}
@@ -280,6 +281,15 @@ export function FeedbackCard({
                   {isEvaluatingRepeat ? <RotateCw className="spin-icon" size={16} /> : <Check size={16} />}
                   <span>Verify Repeat {sessionMode ? `(${repsDoneCount + 1}/${repetitionsRequired})` : ''}</span>
                 </button>
+              </div>
+            )}
+
+            {isListening && (!sessionMode || repsDoneCount < repetitionsRequired) && (
+              <div className="audio-wave-bars" style={{ marginTop: '8px' }}>
+                <span className="bar bar1" />
+                <span className="bar bar2" />
+                <span className="bar bar3" />
+                <span className="listening-label">Listening... Repeat clearly now</span>
               </div>
             )}
 

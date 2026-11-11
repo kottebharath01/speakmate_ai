@@ -50,6 +50,7 @@ export function WordsExpressions() {
   const {
     transcript,
     setTranscript,
+    interimTranscript,
     isListening,
     startListening,
     stopListening,
@@ -163,15 +164,22 @@ export function WordsExpressions() {
     loadInitialSessionData();
   }, []);
 
-  // Sync voice transcript into the appropriate active input field
+  // Sync voice transcript and listening visual state cleanly
   useEffect(() => {
-    if (!transcript) return;
-    if (stepFeedback?.repetition_required) {
-      setRepeatTyped(transcript);
-    } else {
-      setTypedAnswer(transcript);
+    if (isListening) {
+      setRobotState('LISTENING', 'Listening... Speak your English answer clearly!');
     }
-  }, [transcript, stepFeedback]);
+  }, [isListening, setRobotState]);
+
+  useEffect(() => {
+    if (!transcript && !interimTranscript) return;
+    const text = transcript || interimTranscript;
+    if (stepFeedback?.repetition_required) {
+      setRepeatTyped(text);
+    } else {
+      setTypedAnswer(text);
+    }
+  }, [transcript, interimTranscript, stepFeedback]);
 
   // Load Learning History when switching to history tab
   const loadHistory = async () => {
@@ -822,7 +830,10 @@ export function WordsExpressions() {
                           type="text"
                           className="english-answer-input"
                           value={typedAnswer}
-                          onChange={(e) => setTypedAnswer(e.target.value)}
+                          onChange={(e) => {
+                            setTypedAnswer(e.target.value);
+                            setTranscript(e.target.value);
+                          }}
                           placeholder={isListening ? 'Listening... speak in English' : 'Type or speak the English answer...'}
                           disabled={submittingAnswer}
                           aria-label="English answer input"
@@ -838,6 +849,14 @@ export function WordsExpressions() {
                           <ArrowRight size={16} />
                         </button>
                       </div>
+                      {isListening && (
+                        <div className="audio-wave-bars" style={{ marginTop: '4px' }}>
+                          <span className="bar bar1" />
+                          <span className="bar bar2" />
+                          <span className="bar bar3" />
+                          <span className="listening-label">Listening... Speak in English now (click Stop or Submit when done)</span>
+                        </div>
+                      )}
                       <p className="input-helper-caption">
                         Evaluates meaning, natural English usage & grammar (Voice converts speech to text).
                       </p>
@@ -935,6 +954,13 @@ export function WordsExpressions() {
                           </div>
                         </div>
 
+                        {speechError && (
+                          <div className="voice-error-notice">
+                            <AlertTriangle size={15} />
+                            <span>{speechError}</span>
+                          </div>
+                        )}
+
                         {stepFeedback.repetitions_completed < 2 && (
                           <form onSubmit={handleSubmitRepeat} className="voice-text-input-row">
                             <button
@@ -951,7 +977,10 @@ export function WordsExpressions() {
                               type="text"
                               className="english-answer-input"
                               value={repeatTyped}
-                              onChange={(e) => setRepeatTyped(e.target.value)}
+                              onChange={(e) => {
+                                setRepeatTyped(e.target.value);
+                                setTranscript(e.target.value);
+                              }}
                               placeholder={`Repeat "${stepFeedback.accepted_answer}" (${stepFeedback.repetitions_completed === 0 ? '1st time: 1/2' : '2nd time: 2/2'})...`}
                               disabled={submittingRepeat}
                               aria-label="Repetition input"
@@ -970,6 +999,15 @@ export function WordsExpressions() {
                               </span>
                             </button>
                           </form>
+                        )}
+
+                        {isListening && stepFeedback.repetitions_completed < 2 && (
+                          <div className="audio-wave-bars">
+                            <span className="bar bar1" />
+                            <span className="bar bar2" />
+                            <span className="bar bar3" />
+                            <span className="listening-label">Listening... Repeat the sentence aloud now</span>
+                          </div>
                         )}
 
                         {repeatErrorMsg && (

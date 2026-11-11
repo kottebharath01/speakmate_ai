@@ -22,15 +22,21 @@ export function TutorProvider({ children }) {
   const { speak, stop, isSpeaking } = useSpeechSynthesis();
 
   const setRobotState = useCallback(
-    (state, message = null) => {
+    (state, message = null, shouldSpeak = true) => {
       setRobotStateInternal(state);
       setCustomMessage(message);
 
-      if (voiceEnabled && message) {
+      if (state === 'LISTENING') {
+        // Never talk over the learner's microphone while they are speaking
+        stop();
+        return;
+      }
+
+      if (voiceEnabled && shouldSpeak && message) {
         speak(message);
       }
     },
-    [voiceEnabled, speak]
+    [voiceEnabled, speak, stop]
   );
 
   const triggerCelebration = useCallback(() => {
