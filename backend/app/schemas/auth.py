@@ -37,6 +37,7 @@ class ProfileOut(BaseModel):
     current_level: str
     daily_goal_minutes: int
     streak_count: int
+    longest_streak: int = 0
     target_focus: str
     total_points: int
 

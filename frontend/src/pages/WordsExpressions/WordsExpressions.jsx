@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { wordsExpressionsAPI } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useTutor } from '../../context/TutorContext';
@@ -7,58 +7,46 @@ import { useSpeechRecognition } from '../../hooks/useSpeechRecognition';
 import { RobotTutor } from '../../components/RobotTutor';
 import { DifficultyBadge } from '../../components/DifficultyBadge';
 import {
-  BookOpen, MessageSquare, MessagesSquare, CheckCircle2, Bookmark,
-  BookmarkCheck, Volume2, Search, Sparkles, Filter, RefreshCw,
-  ArrowRight, Award, Lightbulb, AlertTriangle, Layers, Shuffle,
-  HelpCircle, Send, Check, X, ChevronRight, Mic, MicOff, Star
+  BookOpen, MessageSquare, Compass, CheckCircle2, Bookmark,
+  Volume2, Search, Sparkles, RefreshCw, ArrowRight, Award,
+  Lightbulb, AlertTriangle, Check, X, Mic, MicOff, History,
+  Library, Play, RotateCcw, Target, Flame
 } from 'lucide-react';
 
-const SECTIONS = [
-  { id: 'words', label: 'Individual Words', icon: BookOpen, desc: '15 everyday categories with definitions, examples & mistakes' },
-  { id: 'phrases', label: 'Daily Phrases & Expressions', icon: MessageSquare, desc: 'Natural conversational idioms & situational nuances' },
-  { id: 'sentences', label: 'Complete Telugu-to-English Sentences', icon: Layers, desc: 'Full sentence structures, tenses & grammar formulas' },
-  { id: 'situations', label: 'Situation-Based Expressions', icon: MessagesSquare, desc: 'Real-life dialogues across office, travel, daily life & interviews' },
-  { id: 'practice', label: 'Interactive Quizzes & Practice', icon: Award, desc: 'Test yourself with translation, usage & sentence challenges' },
-  { id: 'bookmarks', label: 'My Saved & Learned', icon: Bookmark, desc: 'Review your bookmarked items and track mastery' }
+const MODULE_TABS = [
+  { id: 'session', label: 'AI Tutor Session', icon: Play },
+  { id: 'history', label: 'Learning History', icon: History },
+  { id: 'library', label: 'Content Library', icon: Library },
 ];
 
+const MODE_OPTIONS = [
+  {
+    id: 'words',
+    title: 'Words',
+    icon: BookOpen,
+    subtitle: 'Individual Telugu words & natural English equivalents',
+  },
+  {
+    id: 'expressions',
+    title: 'Expressions',
+    icon: MessageSquare,
+    subtitle: 'Daily-use expressions, complete sentences & office phrases',
+  },
+  {
+    id: 'situation_expressions',
+    title: 'Situation Expressions',
+    icon: Compass,
+    subtitle: 'Topic-based phrases for Daily Life, Office, Travel & Interviews',
+  },
+];
+
+const TARGET_PRESETS = [5, 10, 15, 20];
+
 export function WordsExpressions() {
-  const { user, profile, refreshProfile } = useAuth();
+  const { refreshProfile } = useAuth();
   const { setRobotState, triggerCelebration } = useTutor();
   const { speak } = useSpeechSynthesis();
 
-  // Active section & view state
-  const [activeSection, setActiveSection] = useState('words');
-  const [items, setItems] = useState([]);
-  const [totalItems, setTotalItems] = useState(0);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(false);
-
-  // Filters
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [categories, setCategories] = useState([]);
-  const [selectedLevel, setSelectedLevel] = useState('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  // Daily featured showcase & user progress
-  const [dailyFeatured, setDailyFeatured] = useState(null);
-  const [userStats, setUserStats] = useState(null);
-
-  // Selected item modal / deep dive
-  const [activeItem, setActiveItem] = useState(null);
-  const [userSentence, setUserSentence] = useState('');
-  const [checkingSentence, setCheckingSentence] = useState(false);
-  const [sentenceFeedback, setSentenceFeedback] = useState(null);
-
-  // Quizzes state
-  const [exercises, setExercises] = useState([]);
-  const [currentQuizIdx, setCurrentQuizIdx] = useState(0);
-  const [selectedAnswer, setSelectedAnswer] = useState('');
-  const [quizResult, setQuizResult] = useState(null);
-  const [submittingQuiz, setSubmittingQuiz] = useState(false);
-
-  // Speech recognition for sentence creator
   const {
     transcript,
     setTranscript,
@@ -66,910 +54,1104 @@ export function WordsExpressions() {
     startListening,
     stopListening,
     resetTranscript,
+    error: speechError,
+    isSupported: speechSupported,
   } = useSpeechRecognition();
 
-  // Sync voice transcript to sentence input
+  // Top-level view within module: 'session' | 'history' | 'library'
+  const [activeTab, setActiveTab] = useState('session');
+
+  // Modes summary & setup state
+  const [modesSummary, setModesSummary] = useState(null);
+  const [selectedMode, setSelectedMode] = useState('words');
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [dailyTarget, setDailyTarget] = useState(10);
+  const [isRevision, setIsRevision] = useState(false);
+  const [setupError, setSetupError] = useState('');
+  const [startingSession, setStartingSession] = useState(false);
+
+  // Active AI Tutor Session state
+  const [activeSession, setActiveSession] = useState(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [typedAnswer, setTypedAnswer] = useState('');
+  const [submittingAnswer, setSubmittingAnswer] = useState(false);
+
+  // Step feedback state (when item just evaluated)
+  const [stepFeedback, setStepFeedback] = useState(null);
+  const [repeatTyped, setRepeatTyped] = useState('');
+  const [repeatErrorMsg, setRepeatErrorMsg] = useState('');
+  const [submittingRepeat, setSubmittingRepeat] = useState(false);
+  const [completionInfo, setCompletionInfo] = useState(null);
+
+  // History tab state
+  const [historySessions, setHistorySessions] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [expandedSessionId, setExpandedSessionId] = useState(null);
+
+  // Library browser tab state
+  const [libraryItems, setLibraryItems] = useState([]);
+  const [librarySearch, setLibrarySearch] = useState('');
+  const [libraryModeFilter, setLibraryModeFilter] = useState('ALL');
+  const [loadingLibrary, setLoadingLibrary] = useState(false);
+
+  const autoAdvanceTimerRef = useRef(null);
+
+  // Clear auto-advance timer safely on cleanup
   useEffect(() => {
-    if (transcript) {
-      setUserSentence(transcript);
+    return () => {
+      if (autoAdvanceTimerRef.current) {
+        clearTimeout(autoAdvanceTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Load initial modes summary & check for existing active session
+  const loadInitialSessionData = async () => {
+    setSessionLoading(true);
+    try {
+      const [summaryRes, activeRes] = await Promise.all([
+        wordsExpressionsAPI.getModesSummary(),
+        wordsExpressionsAPI.getActiveSession(),
+      ]);
+      setModesSummary(summaryRes.data);
+
+      if (activeRes.data && activeRes.data.status === 'active') {
+        const sess = activeRes.data;
+        setActiveSession(sess);
+
+        // If refreshing mid-way through a 2-repetition correction, restore feedback state!
+        if (sess.pending_attempt) {
+          const pa = sess.pending_attempt;
+          setStepFeedback({
+            attempt_id: pa.id,
+            is_correct: false,
+            accepted_answer: pa.accepted_answer,
+            valid_alternatives: pa.valid_alternatives_json || [],
+            evaluation_feedback: pa.evaluation_feedback,
+            correction_details: pa.correction_details,
+            example_sentence: pa.example_sentence,
+            repetition_required: true,
+            repetitions_completed: pa.repetition_success_count,
+            repetitions_required: 2,
+          });
+          setRobotState(
+            'TEACHING',
+            `Welcome back! Repeat "${pa.accepted_answer}" (${pa.repetition_success_count}/2 completed).`
+          );
+        } else if (sess.current_item) {
+          setStepFeedback(null);
+          setRobotState(
+            'EXPLAINING',
+            `Telugu: "${sess.current_item.telugu_text}". How do you say this in English?`
+          );
+        }
+      } else {
+        setActiveSession(null);
+        setRobotState(
+          'GREETING',
+          'Choose a learning mode and set your daily target to begin Words & Expressions!'
+        );
+      }
+    } catch (err) {
+      console.warn('Error initializing Words & Expressions module:', err);
+    } finally {
+      setSessionLoading(false);
     }
-  }, [transcript]);
+  };
 
-  // Initial load: daily featured & user stats
   useEffect(() => {
-    setRobotState(
-      'GREETING',
-      'Welcome to Words & Expressions! Learn how to convert Telugu thoughts into natural, fluent English.'
-    );
+    loadInitialSessionData();
+  }, []);
 
-    const loadMeta = async () => {
-      try {
-        const [featuredRes, statsRes] = await Promise.all([
-          wordsExpressionsAPI.getDailyFeatured(),
-          wordsExpressionsAPI.getProgress(),
-        ]);
-        setDailyFeatured(featuredRes.data);
-        setUserStats(statsRes.data);
-      } catch (err) {
-        console.warn('Failed to load featured/stats:', err);
+  // Sync voice transcript into the appropriate active input field
+  useEffect(() => {
+    if (!transcript) return;
+    if (stepFeedback?.repetition_required) {
+      setRepeatTyped(transcript);
+    } else {
+      setTypedAnswer(transcript);
+    }
+  }, [transcript, stepFeedback]);
+
+  // Load Learning History when switching to history tab
+  const loadHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await wordsExpressionsAPI.getSessionHistory();
+      setHistorySessions(res.data || []);
+    } catch (err) {
+      console.warn('Failed to load word session history:', err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // Load Library browser items
+  const loadLibrary = async () => {
+    setLoadingLibrary(true);
+    try {
+      const params = { page: 1, page_size: 40 };
+      if (librarySearch.trim()) params.search = librarySearch.trim();
+      if (libraryModeFilter === 'WORDS') params.section = 'words';
+      if (libraryModeFilter === 'PHRASES') params.section = 'phrases';
+      if (libraryModeFilter === 'SITUATIONS') params.section = 'situations';
+      if (libraryModeFilter === 'BOOKMARKED') params.bookmarked_only = true;
+      const res = await wordsExpressionsAPI.getItems(params);
+      setLibraryItems(res.data.items || []);
+    } catch (err) {
+      console.warn('Failed to load content library:', err);
+    } finally {
+      setLoadingLibrary(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'history') {
+      loadHistory();
+    } else if (activeTab === 'library') {
+      loadLibrary();
+    }
+  }, [activeTab, librarySearch, libraryModeFilter]);
+
+  // Derived mode stats for setup screen
+  const activeModeObj = modesSummary?.modes?.find((m) => m.mode === selectedMode);
+  const availableCategories = activeModeObj?.categories || [];
+  const selectedCatObj = availableCategories.find((c) => c.name === selectedCategory);
+  const eligibleCountForSelection = isRevision
+    ? (selectedCategory === 'All'
+        ? (activeModeObj ? activeModeObj.total_items - activeModeObj.remaining_new_items : 0)
+        : (selectedCatObj ? selectedCatObj.total_count - selectedCatObj.remaining_new_count : 0))
+    : (selectedCategory === 'All'
+        ? (activeModeObj?.remaining_new_items ?? 0)
+        : (selectedCatObj?.remaining_new_count ?? 0));
+
+  // Start Guided Learning Session
+  const handleStartSession = async (e) => {
+    e.preventDefault();
+    setSetupError('');
+    setCompletionInfo(null);
+    setStepFeedback(null);
+    setTypedAnswer('');
+    setRepeatTyped('');
+    resetTranscript();
+
+    const targetNum = parseInt(dailyTarget, 10);
+    if (!targetNum || targetNum < 1) {
+      setSetupError('Please enter a daily target of at least 1.');
+      return;
+    }
+
+    setStartingSession(true);
+    try {
+      const res = await wordsExpressionsAPI.startSession({
+        mode: selectedMode,
+        category: selectedCategory,
+        daily_target: targetNum,
+        is_revision: isRevision,
+      });
+      setActiveSession(res.data);
+      if (res.data.current_item) {
+        setRobotState(
+          'EXPLAINING',
+          `Let's start! Telugu: "${res.data.current_item.telugu_text}". How do you say this in English?`
+        );
       }
-    };
-    loadMeta();
-  }, [setRobotState]);
+    } catch (err) {
+      setSetupError(err.response?.data?.detail || 'Could not start session. Please check target count.');
+    } finally {
+      setStartingSession(false);
+    }
+  };
 
-  // Load categories when section changes
-  useEffect(() => {
-    const loadCategories = async () => {
-      if (['words', 'phrases', 'sentences', 'situations'].includes(activeSection)) {
-        try {
-          const res = await wordsExpressionsAPI.getCategories(activeSection);
-          setCategories(res.data);
-          setSelectedCategory('All');
-          setPage(1);
-        } catch (err) {
-          console.warn('Failed to load categories:', err);
-        }
+  // Helper to move session smoothly to next item or complete
+  const advanceSessionView = async (nextItem, completedCount, totalTarget, isDone, streakData) => {
+    setStepFeedback(null);
+    setTypedAnswer('');
+    setRepeatTyped('');
+    setRepeatErrorMsg('');
+    resetTranscript();
+
+    if (isDone) {
+      setActiveSession(null);
+      setCompletionInfo({
+        completed_count: completedCount,
+        daily_target: totalTarget,
+        mode: selectedMode,
+        category: selectedCategory,
+        streak_info: streakData,
+      });
+      setRobotState('SUCCESS', `Congratulations! You completed today's target of ${totalTarget} items!`);
+      triggerCelebration();
+      await refreshProfile();
+      const summaryRes = await wordsExpressionsAPI.getModesSummary();
+      setModesSummary(summaryRes.data);
+      return;
+    }
+
+    if (nextItem) {
+      setActiveSession((prev) =>
+        prev
+          ? {
+              ...prev,
+              completed_count: completedCount,
+              current_index: prev.current_index + 1,
+              current_item: nextItem,
+            }
+          : null
+      );
+      setRobotState(
+        'EXPLAINING',
+        `Next item (${completedCount + 1}/${totalTarget}): How do you say this in English?`
+      );
+    }
+  };
+
+  // Step 2 & 3: Submit Learner Answer
+  const handleSubmitAnswer = async (e) => {
+    if (e) e.preventDefault();
+    const answerText = (typedAnswer || transcript).trim();
+    if (!answerText || !activeSession?.current_item || submittingAnswer) return;
+    if (isListening) stopListening();
+
+    setSubmittingAnswer(true);
+    setRepeatErrorMsg('');
+    setRobotState('THINKING', 'Evaluating your English answer...');
+
+    try {
+      const res = await wordsExpressionsAPI.submitSessionAnswer(activeSession.id, {
+        item_id: activeSession.current_item.id,
+        answer: answerText,
+      });
+      const data = res.data;
+
+      if (data.is_correct) {
+        // Correct -> Show confirmation + example sentence, then automatically progress!
+        setStepFeedback({ ...data, repetition_required: false });
+        setRobotState('SUCCESS', data.evaluation_feedback);
+        await refreshProfile();
+
+        autoAdvanceTimerRef.current = setTimeout(() => {
+          advanceSessionView(
+            data.next_item,
+            data.completed_count,
+            data.daily_target,
+            data.session_completed,
+            data.streak_info
+          );
+        }, 2200);
+      } else {
+        // Incorrect -> Enter mandatory 2-repetition workflow (1/2, 2/2)
+        setStepFeedback(data);
+        setTypedAnswer('');
+        resetTranscript();
+        setRobotState(
+          'TEACHING',
+          `Almost! Correct English: "${data.accepted_answer}". Please repeat it twice (1/2).`
+        );
       }
-    };
-    loadCategories();
-  }, [activeSection]);
+    } catch (err) {
+      setRobotState('IDLE', err.response?.data?.detail || 'Error checking your answer.');
+    } finally {
+      setSubmittingAnswer(false);
+    }
+  };
 
-  // Load items or quiz exercises
-  useEffect(() => {
-    const fetchData = async () => {
-      if (activeSection === 'practice') {
-        // Load quiz exercises
-        setLoading(true);
-        try {
-          const res = await wordsExpressionsAPI.getExercises(null, 10);
-          setExercises(res.data);
-          setCurrentQuizIdx(0);
-          setSelectedAnswer('');
-          setQuizResult(null);
-        } catch (err) {
-          console.warn('Failed to load exercises:', err);
-        } finally {
-          setLoading(false);
-        }
+  // Step 5: Submit Repetition (Enforces 1/2 -> 2/2)
+  const handleSubmitRepeat = async (e) => {
+    if (e) e.preventDefault();
+    const repText = (repeatTyped || transcript).trim();
+    if (!repText || !stepFeedback?.attempt_id || submittingRepeat) return;
+    if (isListening) stopListening();
+
+    setSubmittingRepeat(true);
+    setRepeatErrorMsg('');
+    setRobotState('THINKING', 'Checking your repetition...');
+
+    try {
+      const res = await wordsExpressionsAPI.submitSessionRepeat(activeSession.id, {
+        attempt_id: stepFeedback.attempt_id,
+        repeated_answer: repText,
+      });
+      const data = res.data;
+
+      if (!data.is_successful) {
+        setRepeatErrorMsg(data.feedback);
+        setRobotState('TEACHING', data.feedback);
         return;
       }
 
-      setLoading(true);
-      try {
-        const params = {
-          page,
-          page_size: 12,
-          category: selectedCategory !== 'All' ? selectedCategory : undefined,
-          level: selectedLevel !== 'ALL' ? selectedLevel : undefined,
-          search: searchQuery.trim() ? searchQuery.trim() : undefined,
-        };
+      setRepeatTyped('');
+      resetTranscript();
 
-        if (activeSection === 'bookmarks') {
-          params.bookmarked_only = true;
-        } else {
-          params.section = activeSection;
-        }
-
-        const res = await wordsExpressionsAPI.getItems(params);
-        setItems(res.data.items);
-        setTotalItems(res.data.total);
-        setTotalPages(res.data.total_pages);
-      } catch (err) {
-        console.warn('Failed to load items:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [activeSection, selectedCategory, selectedLevel, searchQuery, page]);
-
-  // Bookmark toggle
-  const handleToggleBookmark = async (e, item) => {
-    e.stopPropagation();
-    try {
-      const res = await wordsExpressionsAPI.toggleBookmark(item.id);
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, is_bookmarked: res.data.is_bookmarked } : i))
-      );
-      if (activeItem && activeItem.id === item.id) {
-        setActiveItem((prev) => ({ ...prev, is_bookmarked: res.data.is_bookmarked }));
-      }
-      // Refresh stats
-      const statsRes = await wordsExpressionsAPI.getProgress();
-      setUserStats(statsRes.data);
-    } catch (err) {
-      console.error('Bookmark error:', err);
-    }
-  };
-
-  // Mark learned toggle
-  const handleToggleLearned = async (e, item) => {
-    e.stopPropagation();
-    try {
-      const res = await wordsExpressionsAPI.toggleLearned(item.id);
-      setItems((prev) =>
-        prev.map((i) => (i.id === item.id ? { ...i, is_learned: res.data.is_learned } : i))
-      );
-      if (activeItem && activeItem.id === item.id) {
-        setActiveItem((prev) => ({ ...prev, is_learned: res.data.is_learned }));
-      }
-      if (res.data.is_learned) {
-        triggerCelebration();
-      }
-      await refreshProfile();
-      const statsRes = await wordsExpressionsAPI.getProgress();
-      setUserStats(statsRes.data);
-    } catch (err) {
-      console.error('Mark learned error:', err);
-    }
-  };
-
-  // Random learning item ("Surprise Me")
-  const handleSurpriseMe = async () => {
-    try {
-      const sec = ['words', 'phrases', 'sentences', 'situations'].includes(activeSection)
-        ? activeSection
-        : undefined;
-      const res = await wordsExpressionsAPI.getRandom(sec);
-      openItemDetail(res.data);
-      setRobotState(
-        'EXPLAINING',
-        `Here is a surprise expression for you: "${res.data.english_text}". Let's explore how to use it!`
-      );
-    } catch (err) {
-      console.error('Random item error:', err);
-    }
-  };
-
-  // Open detail modal and instruct robot
-  const openItemDetail = (item) => {
-    setActiveItem(item);
-    setUserSentence('');
-    setSentenceFeedback(null);
-    resetTranscript();
-
-    let robotMsg = `In Telugu, we say "${item.telugu_text}". In English, the natural expression is "${item.english_text}".`;
-    if (item.when_to_use) {
-      robotMsg += ` Use it: ${item.when_to_use}`;
-    }
-    setRobotState('TEACHING', robotMsg);
-  };
-
-  // Check student's custom sentence
-  const handleCheckSentence = async () => {
-    if (!userSentence.trim() || checkingSentence || !activeItem) return;
-    if (isListening) stopListening();
-
-    setCheckingSentence(true);
-    setRobotState('THINKING', 'Analyzing your sentence grammar, tense, and natural phrasing...');
-
-    try {
-      const res = await wordsExpressionsAPI.checkSentence({
-        item_id: activeItem.id,
-        target_text: activeItem.english_text,
-        user_sentence: userSentence.trim(),
-      });
-
-      setSentenceFeedback(res.data);
-      if (res.data.is_correct) {
-        setRobotState('SUCCESS', res.data.encouragement);
-        triggerCelebration();
+      if (!data.item_completed) {
+        // 1/2 completed -> update count and wait for 2/2
+        setStepFeedback((prev) => ({
+          ...prev,
+          repetitions_completed: data.repetitions_completed,
+        }));
+        setRobotState('SUCCESS', data.feedback);
       } else {
-        setRobotState('TEACHING', res.data.feedback);
-      }
-      await refreshProfile();
-    } catch (err) {
-      console.error('Sentence check error:', err);
-      setRobotState('IDLE');
-    } finally {
-      setCheckingSentence(false);
-    }
-  };
-
-  // Quiz submission
-  const currentQuiz = exercises[currentQuizIdx];
-
-  const handleQuizSubmit = async () => {
-    if (!selectedAnswer || submittingQuiz || !currentQuiz) return;
-    setSubmittingQuiz(true);
-
-    try {
-      const res = await wordsExpressionsAPI.checkExercise({
-        exercise_id: currentQuiz.id,
-        selected_answer: selectedAnswer,
-      });
-
-      setQuizResult(res.data);
-      if (res.data.is_correct) {
-        setRobotState('SUCCESS', 'Spot on! That is the natural native choice.');
-        triggerCelebration();
+        // 2/2 completed -> automatically advance to next item!
+        setStepFeedback((prev) => ({
+          ...prev,
+          repetitions_completed: 2,
+          item_completed: true,
+        }));
+        setRobotState('SUCCESS', data.feedback);
         await refreshProfile();
-      } else {
-        setRobotState('TEACHING', res.data.explanation);
+
+        autoAdvanceTimerRef.current = setTimeout(() => {
+          advanceSessionView(
+            data.next_item,
+            data.completed_count,
+            data.daily_target,
+            data.session_completed,
+            data.streak_info
+          );
+        }, 1600);
       }
     } catch (err) {
-      console.error('Quiz submit error:', err);
+      setRepeatErrorMsg(err.response?.data?.detail || 'Could not verify repetition.');
     } finally {
-      setSubmittingQuiz(false);
+      setSubmittingRepeat(false);
     }
   };
 
-  const handleNextQuiz = () => {
-    setSelectedAnswer('');
-    setQuizResult(null);
-    if (currentQuizIdx < exercises.length - 1) {
-      setCurrentQuizIdx((prev) => prev + 1);
-    } else {
-      // Loop back
-      setCurrentQuizIdx(0);
+  const handleAbandonSession = async () => {
+    if (!activeSession) return;
+    if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current);
+    try {
+      await wordsExpressionsAPI.abandonSession(activeSession.id);
+    } catch (e) {}
+    setActiveSession(null);
+    setStepFeedback(null);
+    setTypedAnswer('');
+    setRepeatTyped('');
+    resetTranscript();
+    loadInitialSessionData();
+  };
+
+  const handleToggleBookmarkLibrary = async (itemId) => {
+    try {
+      const res = await wordsExpressionsAPI.toggleBookmark(itemId);
+      setLibraryItems((prev) =>
+        prev.map((item) =>
+          item.id === itemId ? { ...item, is_bookmarked: res.data.is_bookmarked } : item
+        )
+      );
+    } catch (err) {
+      console.warn('Bookmark failed:', err);
     }
+  };
+
+  const handleManualNext = () => {
+    if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current);
+    if (!stepFeedback) return;
+    advanceSessionView(
+      stepFeedback.next_item,
+      stepFeedback.completed_count,
+      stepFeedback.daily_target,
+      stepFeedback.session_completed,
+      stepFeedback.streak_info
+    );
   };
 
   return (
-    <div className="words-expressions-page">
-      {/* Page Header */}
-      <div className="words-page-header">
-        <div className="header-titles">
-          <div className="module-pill">
-            <Sparkles size={14} />
-            <span>Telugu to Natural English</span>
-          </div>
+    <div className="words-module-container">
+      {/* Clean Header & Module Sub-Navigation */}
+      <div className="module-top-header">
+        <div>
+          <span className="module-tag-pill">
+            <Sparkles size={14} /> Module 1 • Independent Learning
+          </span>
           <h2>Words & Expressions</h2>
-          <p className="subtitle">
-            Master how native speakers naturally express Telugu words, phrases, complete sentences, and workplace situations.
+          <p className="module-subtitle">
+            Learn Telugu words, daily expressions, and real-life situation phrases guided step-by-step by your AI Tutor.
           </p>
         </div>
 
-        <div className="header-stats-row">
-          <div className="stat-capsule">
-            <CheckCircle2 size={16} className="text-green" />
-            <span><strong>{userStats?.learned_count || 0}</strong> Learned</span>
-          </div>
-          <div className="stat-capsule">
-            <BookmarkCheck size={16} className="text-purple" />
-            <span><strong>{userStats?.bookmarked_count || 0}</strong> Saved</span>
-          </div>
-          <button className="btn-surprise-me" onClick={handleSurpriseMe} title="Learn a random expression">
-            <Shuffle size={15} />
-            <span>Surprise Me</span>
-          </button>
+        <div className="module-subnav-pills">
+          {MODULE_TABS.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                className={`subnav-pill-btn ${activeTab === tab.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <Icon size={16} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Daily Showcase (Word, Expression, Sentence of the Day) */}
-      {dailyFeatured && (
-        <div className="daily-showcase-grid">
-          {dailyFeatured.word_of_the_day && (
-            <div
-              className="showcase-card word-card"
-              onClick={() => openItemDetail(dailyFeatured.word_of_the_day)}
-            >
-              <div className="showcase-tag">
-                <Star size={13} />
-                <span>WORD OF THE DAY</span>
+      {/* =====================================================================
+          TAB 1: AI TUTOR SESSION WORKSPACE
+         ===================================================================== */}
+      {activeTab === 'session' && (
+        <div className="we-session-workspace">
+          {sessionLoading ? (
+            <div className="loading-state-box">
+              <RefreshCw size={32} className="spin-icon text-blue" />
+              <p>Loading your Words & Expressions session...</p>
+            </div>
+          ) : completionInfo ? (
+            /* SESSION COMPLETED CELEBRATION VIEW */
+            <div className="session-complete-card" data-testid="words-session-complete">
+              <div className="complete-robot-wrap">
+                <RobotTutor size="medium" showMessage={true} />
               </div>
-              <h3 className="showcase-english">{dailyFeatured.word_of_the_day.english_text}</h3>
-              <p className="showcase-telugu">{dailyFeatured.word_of_the_day.telugu_text}</p>
-              <p className="showcase-def">{dailyFeatured.word_of_the_day.english_definition}</p>
-              <div className="showcase-bottom">
-                <span className="pos-text">{dailyFeatured.word_of_the_day.part_of_speech}</span>
-                <span className="btn-explore-text">Explore <ArrowRight size={14} /></span>
+              <div className="complete-badge">
+                <Award size={20} />
+                <span>SESSION COMPLETE</span>
+              </div>
+              <h3>Great Job! Today's Target Completed!</h3>
+              <p className="complete-desc">
+                You completed <strong>{completionInfo.completed_count} / {completionInfo.daily_target}</strong>{' '}
+                items in <strong>{MODE_OPTIONS.find((m) => m.id === completionInfo.mode)?.title}</strong>{' '}
+                ({completionInfo.category}).
+              </p>
+
+              {completionInfo.streak_info && (
+                <div className="complete-streak-banner">
+                  <Flame size={20} className="flame-icon" />
+                  <span>
+                    Current Streak: <strong>{completionInfo.streak_info.current_streak} Days</strong>
+                    {' '}• Longest Streak: <strong>{completionInfo.streak_info.longest_streak} Days</strong>
+                  </span>
+                </div>
+              )}
+
+              <div className="complete-actions-row">
+                <button
+                  type="button"
+                  className="btn-primary-action"
+                  onClick={() => {
+                    setCompletionInfo(null);
+                    setActiveTab('history');
+                  }}
+                >
+                  <History size={17} />
+                  <span>View Learning History</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary-action"
+                  onClick={() => {
+                    setCompletionInfo(null);
+                    loadInitialSessionData();
+                  }}
+                >
+                  <RotateCcw size={17} />
+                  <span>Start New Session</span>
+                </button>
               </div>
             </div>
-          )}
+          ) : !activeSession ? (
+            /* SESSION SETUP SCREEN (3 Modes + Category + Target) */
+            <div className="session-setup-grid">
+              <div className="setup-main-card">
+                <div className="setup-step-block">
+                  <h3>1. Select Learning Mode</h3>
+                  <div className="mode-cards-grid">
+                    {MODE_OPTIONS.map((mode) => {
+                      const Icon = mode.icon;
+                      const stats = modesSummary?.modes?.find((m) => m.mode === mode.id);
+                      const remaining = stats?.remaining_new_items ?? 0;
+                      const isSelected = selectedMode === mode.id;
 
-          {dailyFeatured.expression_of_the_day && (
-            <div
-              className="showcase-card phrase-card"
-              onClick={() => openItemDetail(dailyFeatured.expression_of_the_day)}
-            >
-              <div className="showcase-tag tag-purple">
-                <Sparkles size={13} />
-                <span>EXPRESSION OF THE DAY</span>
+                      return (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          className={`mode-select-card ${isSelected ? 'selected' : ''}`}
+                          onClick={() => {
+                            setSelectedMode(mode.id);
+                            setSelectedCategory('All');
+                            setSetupError('');
+                          }}
+                        >
+                          <div className="mode-card-icon">
+                            <Icon size={22} />
+                          </div>
+                          <div className="mode-card-body">
+                            <h4>{mode.title}</h4>
+                            <p>{mode.subtitle}</p>
+                            <span className="mode-count-chip">
+                              {remaining} new items ready
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <form onSubmit={handleStartSession} className="setup-config-form">
+                  <div className="setup-row-two">
+                    {/* Step 2: Category Selection */}
+                    <div className="setup-field">
+                      <label htmlFor="we-category-select">2. Category</label>
+                      <select
+                        id="we-category-select"
+                        value={selectedCategory}
+                        onChange={(e) => {
+                          setSelectedCategory(e.target.value);
+                          setSetupError('');
+                        }}
+                      >
+                        <option value="All">
+                          All Categories ({isRevision
+                            ? (activeModeObj ? activeModeObj.total_items - activeModeObj.remaining_new_items : 0)
+                            : (activeModeObj?.remaining_new_items ?? 0)} available)
+                        </option>
+                        {availableCategories.map((cat) => {
+                          const cnt = isRevision
+                            ? cat.total_count - cat.remaining_new_count
+                            : cat.remaining_new_count;
+                          return (
+                            <option key={cat.name} value={cat.name}>
+                              {cat.name} ({cnt} available)
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {/* New Learning vs Revision Toggle */}
+                    <div className="setup-field">
+                      <label>Learning Type</label>
+                      <div className="type-toggle-group">
+                        <button
+                          type="button"
+                          className={`toggle-btn ${!isRevision ? 'active' : ''}`}
+                          onClick={() => {
+                            setIsRevision(false);
+                            setSetupError('');
+                          }}
+                        >
+                          New Learning
+                        </button>
+                        <button
+                          type="button"
+                          className={`toggle-btn ${isRevision ? 'active' : ''}`}
+                          onClick={() => {
+                            setIsRevision(true);
+                            setSetupError('');
+                          }}
+                        >
+                          Revision ({activeModeObj ? activeModeObj.total_items - activeModeObj.remaining_new_items : 0})
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 3: Daily Target */}
+                  <div className="setup-field">
+                    <label htmlFor="we-target-input">3. Today's Learning Target</label>
+                    <div className="target-picker-row">
+                      <div className="target-presets">
+                        {TARGET_PRESETS.map((num) => (
+                          <button
+                            key={num}
+                            type="button"
+                            className={`preset-chip ${Number(dailyTarget) === num ? 'active' : ''}`}
+                            onClick={() => {
+                              setDailyTarget(num);
+                              setSetupError('');
+                            }}
+                          >
+                            {num} items
+                          </button>
+                        ))}
+                      </div>
+                      <input
+                        id="we-target-input"
+                        type="number"
+                        min={1}
+                        max={50}
+                        value={dailyTarget}
+                        onChange={(e) => {
+                          setDailyTarget(e.target.value);
+                          setSetupError('');
+                        }}
+                        className="target-number-input"
+                        aria-label="Custom daily target"
+                      />
+                    </div>
+                    <p className="field-hint">
+                      Eligible items in this selection: <strong>{eligibleCountForSelection}</strong>
+                      {isRevision ? ' (Revision does not count toward new item progress)' : ' (Duplicates automatically prevented)'}
+                    </p>
+                  </div>
+
+                  {setupError && (
+                    <div className="setup-error-banner">
+                      <AlertTriangle size={16} />
+                      <span>{setupError}</span>
+                    </div>
+                  )}
+
+                  {eligibleCountForSelection < Number(dailyTarget) && (
+                    <div className="setup-warning-note">
+                      <Lightbulb size={16} />
+                      <span>
+                        Only <strong>{eligibleCountForSelection}</strong> items available here. Lower target to{' '}
+                        <strong>{eligibleCountForSelection}</strong> or choose another category.
+                      </span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="btn-start-session"
+                    disabled={startingSession || eligibleCountForSelection === 0}
+                  >
+                    <Play size={18} />
+                    <span>
+                      {startingSession ? 'Preparing Session...' : `Start ${dailyTarget}-${selectedMode === 'words' ? 'Word' : 'Item'} Session`}
+                    </span>
+                    <ArrowRight size={18} />
+                  </button>
+                </form>
               </div>
-              <h3 className="showcase-english">{dailyFeatured.expression_of_the_day.english_text}</h3>
-              <p className="showcase-telugu">{dailyFeatured.expression_of_the_day.telugu_text}</p>
-              <p className="showcase-def">{dailyFeatured.expression_of_the_day.when_to_use || 'Daily spoken conversation'}</p>
-              <div className="showcase-bottom">
-                <span className="pos-text">Conversational Phrase</span>
-                <span className="btn-explore-text">Explore <ArrowRight size={14} /></span>
+
+              <div className="setup-robot-aside">
+                <RobotTutor size="medium" showMessage={true} />
+                <div className="aside-stats-card">
+                  <Target size={18} className="text-blue" />
+                  <div>
+                    <strong>{modesSummary?.total_learned_by_user ?? 0} Mastered</strong>
+                    <span>Total words & expressions completed</span>
+                  </div>
+                </div>
               </div>
             </div>
-          )}
+          ) : (
+            /* ACTIVE AI TUTOR LEARNING WORKFLOW */
+            <div className="active-tutor-stage" data-testid="words-active-stage">
+              {/* Session Progress Bar */}
+              <div className="stage-progress-bar">
+                <div className="stage-meta-badges">
+                  <span className="meta-chip mode">{MODE_OPTIONS.find((m) => m.id === activeSession.mode)?.title}</span>
+                  <span className="meta-chip cat">{activeSession.category}</span>
+                  {activeSession.is_revision && <span className="meta-chip rev">Revision</span>}
+                </div>
 
-          {dailyFeatured.sentence_of_the_day && (
-            <div
-              className="showcase-card sentence-card"
-              onClick={() => openItemDetail(dailyFeatured.sentence_of_the_day)}
-            >
-              <div className="showcase-tag tag-blue">
-                <Layers size={13} />
-                <span>SENTENCE OF THE DAY</span>
+                <div className="stage-counter-wrap">
+                  <span className="counter-label" data-testid="words-session-progress">
+                    Completed: <strong>{activeSession.completed_count} / {activeSession.daily_target}</strong>
+                  </span>
+                  <div className="linear-progress-track">
+                    <div
+                      className="linear-progress-fill"
+                      style={{
+                        width: `${Math.round((activeSession.completed_count / activeSession.daily_target) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="btn-abandon-session"
+                  onClick={handleAbandonSession}
+                >
+                  End Session
+                </button>
               </div>
-              <h3 className="showcase-english">"{dailyFeatured.sentence_of_the_day.english_text}"</h3>
-              <p className="showcase-telugu">{dailyFeatured.sentence_of_the_day.telugu_text}</p>
-              <p className="showcase-def">{dailyFeatured.sentence_of_the_day.sentence_structure || 'Complete Sentence'}</p>
-              <div className="showcase-bottom">
-                <span className="pos-text">{dailyFeatured.sentence_of_the_day.category}</span>
-                <span className="btn-explore-text">Explore <ArrowRight size={14} /></span>
+
+              {/* Main Teaching Card: Robot + Telugu Prompt + Step Controls */}
+              <div className="tutor-teaching-layout">
+                <div className="tutor-stage-robot">
+                  <RobotTutor size="medium" showMessage={true} />
+                </div>
+
+                <div className="tutor-interaction-card">
+                  {activeSession.current_item && (
+                    <div className="telugu-prompt-panel">
+                      <div className="prompt-top-tags">
+                        <span className="prompt-label">తెలుగు • TELUGU</span>
+                        <DifficultyBadge level={activeSession.current_item.level} showIcon={false} />
+                      </div>
+                      <h2 className="prominent-telugu-text" data-testid="words-telugu-prompt">
+                        {activeSession.current_item.telugu_text}
+                      </h2>
+                      {activeSession.current_item.telugu_transliteration && (
+                        <span className="prompt-translit">
+                          ({activeSession.current_item.telugu_transliteration})
+                        </span>
+                      )}
+                      <p className="tutor-question-line">
+                        "How do you say this in English?"
+                      </p>
+                    </div>
+                  )}
+
+                  {/* PHASE 1: Awaiting Learner's Initial Answer */}
+                  {!stepFeedback ? (
+                    <form onSubmit={handleSubmitAnswer} className="answer-input-panel">
+                      {!speechSupported && (
+                        <div className="voice-fallback-notice">
+                          Voice recording is unavailable in this browser. Type your English answer below.
+                        </div>
+                      )}
+                      {speechError && (
+                        <div className="voice-error-notice">
+                          <AlertTriangle size={15} />
+                          <span>{speechError}</span>
+                        </div>
+                      )}
+
+                      <div className="voice-text-input-row">
+                        <button
+                          type="button"
+                          className={`btn-mic-circle ${isListening ? 'listening' : ''}`}
+                          onClick={isListening ? stopListening : startListening}
+                          disabled={!speechSupported || submittingAnswer}
+                          title={isListening ? 'Stop recording' : 'Speak English answer'}
+                          aria-label={isListening ? 'Stop recording' : 'Speak English answer'}
+                        >
+                          {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+                        </button>
+
+                        <input
+                          type="text"
+                          className="english-answer-input"
+                          value={typedAnswer}
+                          onChange={(e) => setTypedAnswer(e.target.value)}
+                          placeholder={isListening ? 'Listening... speak in English' : 'Type or speak the English answer...'}
+                          disabled={submittingAnswer}
+                          aria-label="English answer input"
+                          autoFocus
+                        />
+
+                        <button
+                          type="submit"
+                          className="btn-submit-answer"
+                          disabled={submittingAnswer || !(typedAnswer.trim() || transcript.trim())}
+                        >
+                          <span>{submittingAnswer ? 'Checking...' : 'Submit'}</span>
+                          <ArrowRight size={16} />
+                        </button>
+                      </div>
+                      <p className="input-helper-caption">
+                        Evaluates meaning, natural English usage & grammar (Voice converts speech to text).
+                      </p>
+                    </form>
+                  ) : !stepFeedback.repetition_required ? (
+                    /* PHASE 2A: Answer Was Correct -> Show Confirmation & Natural Example -> Auto Advance */
+                    <div className="eval-feedback-panel pass" data-testid="words-correct-feedback">
+                      <div className="eval-status-row">
+                        <CheckCircle2 size={22} className="text-green" />
+                        <h4>Correct Answer!</h4>
+                      </div>
+                      <div className="accepted-answer-row">
+                        <strong>"{stepFeedback.accepted_answer}"</strong>
+                        <button
+                          type="button"
+                          className="btn-speak-pill"
+                          onClick={() => speak(stepFeedback.accepted_answer)}
+                          title="Listen pronunciation"
+                        >
+                          <Volume2 size={15} /> Listen
+                        </button>
+                      </div>
+                      <p className="eval-msg">{stepFeedback.evaluation_feedback}</p>
+
+                      {stepFeedback.example_sentence && (
+                        <div className="eval-example-box">
+                          <span className="mini-cap">Natural Example:</span>
+                          <p>"{stepFeedback.example_sentence}"</p>
+                        </div>
+                      )}
+
+                      <button type="button" className="btn-next-now" onClick={handleManualNext}>
+                        <span>{stepFeedback.session_completed ? 'View Completion Summary' : 'Next Item'}</span>
+                        <ArrowRight size={16} />
+                      </button>
+                    </div>
+                  ) : (
+                    /* PHASE 2B: Answer Incorrect -> Explanation + Exact 2 Repetitions (1/2, 2/2) */
+                    <div className="eval-feedback-panel correction" data-testid="words-correction-panel">
+                      <div className="eval-status-row">
+                        <AlertTriangle size={20} className="text-amber" />
+                        <h4>Let's Correct & Practice Together</h4>
+                      </div>
+
+                      <div className="correction-target-card">
+                        <span className="mini-cap">Correct Natural English:</span>
+                        <div className="accepted-answer-row">
+                          <strong className="correct-eng" data-testid="words-correct-answer">
+                            "{stepFeedback.accepted_answer}"
+                          </strong>
+                          <button
+                            type="button"
+                            className="btn-speak-pill"
+                            onClick={() => speak(stepFeedback.accepted_answer)}
+                          >
+                            <Volume2 size={15} /> Listen
+                          </button>
+                        </div>
+
+                        {stepFeedback.valid_alternatives?.length > 1 && (
+                          <p className="alts-line">
+                            Also valid: {stepFeedback.valid_alternatives.slice(0, 4).join(', ')}
+                          </p>
+                        )}
+                      </div>
+
+                      {stepFeedback.correction_details && (
+                        <p className="eval-explanation">{stepFeedback.correction_details}</p>
+                      )}
+
+                      {stepFeedback.example_sentence && (
+                        <div className="eval-example-box">
+                          <span className="mini-cap">Example Sentence:</span>
+                          <p>"{stepFeedback.example_sentence}"</p>
+                        </div>
+                      )}
+
+                      {/* EXACT TWO-REPETITION ENFORCEMENT (1/2, 2/2) */}
+                      <div className="two-rep-box">
+                        <div className="rep-steps-header">
+                          <span className="rep-title">Repeat Corrected Answer Twice:</span>
+                          <div className="rep-badges">
+                            <span
+                              className={`rep-badge ${stepFeedback.repetitions_completed >= 1 ? 'done' : 'active'}`}
+                              data-testid="rep-step-1"
+                            >
+                              {stepFeedback.repetitions_completed >= 1 ? <Check size={13} /> : '1'} First repetition: {Math.min(1, stepFeedback.repetitions_completed)}/2
+                            </span>
+                            <span
+                              className={`rep-badge ${stepFeedback.repetitions_completed >= 2 ? 'done' : stepFeedback.repetitions_completed === 1 ? 'active' : ''}`}
+                              data-testid="rep-step-2"
+                            >
+                              {stepFeedback.repetitions_completed >= 2 ? <Check size={13} /> : '2'} Second repetition: {stepFeedback.repetitions_completed}/2
+                            </span>
+                          </div>
+                        </div>
+
+                        {stepFeedback.repetitions_completed < 2 && (
+                          <form onSubmit={handleSubmitRepeat} className="voice-text-input-row">
+                            <button
+                              type="button"
+                              className={`btn-mic-circle ${isListening ? 'listening' : ''}`}
+                              onClick={isListening ? stopListening : startListening}
+                              disabled={!speechSupported || submittingRepeat}
+                              title="Speak repetition"
+                            >
+                              {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+                            </button>
+
+                            <input
+                              type="text"
+                              className="english-answer-input"
+                              value={repeatTyped}
+                              onChange={(e) => setRepeatTyped(e.target.value)}
+                              placeholder={`Repeat "${stepFeedback.accepted_answer}" (${stepFeedback.repetitions_completed === 0 ? '1st time: 1/2' : '2nd time: 2/2'})...`}
+                              disabled={submittingRepeat}
+                              aria-label="Repetition input"
+                              autoFocus
+                            />
+
+                            <button
+                              type="submit"
+                              className="btn-submit-answer"
+                              disabled={submittingRepeat || !(repeatTyped.trim() || transcript.trim())}
+                            >
+                              <span>
+                                {submittingRepeat
+                                  ? 'Checking...'
+                                  : `Verify (${stepFeedback.repetitions_completed + 1}/2)`}
+                              </span>
+                            </button>
+                          </form>
+                        )}
+
+                        {repeatErrorMsg && (
+                          <p className="rep-error-text">{repeatErrorMsg}</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
         </div>
       )}
 
-      {/* Main Section Navigation Tabs */}
-      <div className="words-sections-tabs-bar">
-        {SECTIONS.map((sec) => {
-          const Icon = sec.icon;
-          return (
-            <button
-              key={sec.id}
-              className={`section-tab-btn ${activeSection === sec.id ? 'active' : ''}`}
-              onClick={() => {
-                setActiveSection(sec.id);
-                setSearchQuery('');
-                setSelectedCategory('All');
-                setSelectedLevel('ALL');
-                setPage(1);
-              }}
-            >
-              <Icon size={18} />
-              <span>{sec.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Content Area Based on Section */}
-      {activeSection === 'practice' ? (
-        /* QUIZ / PRACTICE SECTION */
-        <div className="words-quiz-section">
-          <div className="quiz-container-card">
-            <div className="quiz-header">
-              <div>
-                <span className="quiz-badge">PRACTICE QUIZ</span>
-                <h3>Test Your Telugu-to-English Mastery</h3>
-              </div>
-              <span className="quiz-counter">
-                Question {currentQuizIdx + 1} of {exercises.length}
-              </span>
+      {/* =====================================================================
+          TAB 2: PERSISTENT LEARNING HISTORY
+         ===================================================================== */}
+      {activeTab === 'history' && (
+        <div className="history-list-container" data-testid="words-history-view">
+          {loadingHistory ? (
+            <div className="loading-state-box">
+              <RefreshCw size={28} className="spin-icon text-blue" />
+              <p>Loading your Words & Expressions history...</p>
             </div>
-
-            {currentQuiz ? (
-              <div className="quiz-content-body">
-                <div className="quiz-question-box">
-                  <h4 className="question-title">{currentQuiz.question}</h4>
-                  {currentQuiz.telugu_prompt && (
-                    <p className="question-telugu-hint">{currentQuiz.telugu_prompt}</p>
-                  )}
-                </div>
-
-                <div className="quiz-options-list">
-                  {currentQuiz.options?.map((opt, idx) => (
-                    <button
-                      key={idx}
-                      className={`quiz-option-btn ${selectedAnswer === opt ? 'selected' : ''}`}
-                      onClick={() => !quizResult && setSelectedAnswer(opt)}
-                      disabled={quizResult !== null}
+          ) : historySessions.length === 0 ? (
+            <div className="empty-state-box">
+              <History size={38} className="text-muted" />
+              <h3>No learning sessions yet</h3>
+              <p>Complete an AI Tutor Words & Expressions session to track your words and scores here.</p>
+            </div>
+          ) : (
+            <div className="sessions-history-stack">
+              {historySessions.map((sess) => {
+                const isExpanded = expandedSessionId === sess.id;
+                const modeTitle = MODE_OPTIONS.find((m) => m.id === sess.mode)?.title || sess.mode;
+                return (
+                  <div key={sess.id} className="history-session-card">
+                    <div
+                      className="history-session-summary"
+                      onClick={() => setExpandedSessionId(isExpanded ? null : sess.id)}
                     >
-                      <span className="option-letter">{String.fromCharCode(65 + idx)}</span>
-                      <span className="option-text">{opt}</span>
-                    </button>
-                  ))}
-                </div>
+                      <div className="hs-left">
+                        <div className="hs-badges">
+                          <span className="meta-chip mode">{modeTitle}</span>
+                          <span className="meta-chip cat">{sess.category}</span>
+                          <span className={`status-pill ${sess.status}`}>
+                            {sess.status === 'completed' ? 'Completed' : sess.status}
+                          </span>
+                          {sess.is_revision && <span className="meta-chip rev">Revision</span>}
+                        </div>
+                        <span className="hs-date">Date: {sess.local_date}</span>
+                      </div>
 
-                {!quizResult ? (
-                  <div className="quiz-actions-row">
-                    <button
-                      className="btn-submit-quiz"
-                      onClick={handleQuizSubmit}
-                      disabled={!selectedAnswer || submittingQuiz}
-                    >
-                      <span>{submittingQuiz ? 'Checking...' : 'Submit Answer'}</span>
-                      <ArrowRight size={16} />
-                    </button>
-                  </div>
-                ) : (
-                  <div className={`quiz-result-banner ${quizResult.is_correct ? 'pass' : 'fail'}`}>
-                    <div className="result-top">
-                      {quizResult.is_correct ? (
-                        <>
-                          <CheckCircle2 size={20} className="text-green" />
-                          <strong>Correct! +10 Points</strong>
-                        </>
-                      ) : (
-                        <>
-                          <AlertTriangle size={20} className="text-amber" />
-                          <strong>Correct Answer: {quizResult.correct_answer}</strong>
-                        </>
-                      )}
+                      <div className="hs-right">
+                        <strong>{sess.completed_count} / {sess.daily_target} Items</strong>
+                        <span className="expand-hint">{isExpanded ? 'Hide Details' : 'View Items'}</span>
+                      </div>
                     </div>
-                    <p className="result-expl">{quizResult.explanation}</p>
-                    <button className="btn-next-quiz" onClick={handleNextQuiz}>
-                      <span>Next Question</span>
-                      <ArrowRight size={16} />
-                    </button>
+
+                    {isExpanded && (
+                      <div className="history-attempts-list">
+                        {sess.attempts.length === 0 ? (
+                          <p className="no-attempts-msg">No items answered in this session yet.</p>
+                        ) : (
+                          sess.attempts.map((att) => (
+                            <div key={att.id} className={`history-attempt-row ${att.is_correct ? 'ok' : 'corrected'}`}>
+                              <div className="ha-main">
+                                <span className="ha-telugu">{att.telugu_text}</span>
+                                <span className="ha-ans">Your Answer: <strong>"{att.original_answer}"</strong></span>
+                                <span className="ha-correct">
+                                  Accepted English: <strong>"{att.accepted_answer}"</strong>
+                                </span>
+                              </div>
+                              <div className="ha-meta">
+                                <span className={`eval-pill ${att.is_correct ? 'pass' : 'fixed'}`}>
+                                  {att.is_correct ? 'Correct First Try' : `Corrected (${att.repetition_success_count}/2 repeats)`}
+                                </span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            ) : (
-              <div className="empty-quiz-notice">
-                <CheckCircle2 size={36} className="text-green" />
-                <p>Loading interactive exercises...</p>
-              </div>
-            )}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-      ) : (
-        /* STANDARD BROWSE / CARDS VIEW */
-        <div className="words-content-layout">
-          {/* Controls: Search, Category Pills, Level Filter */}
-          <div className="words-filter-toolbar">
+      )}
+
+      {/* =====================================================================
+          TAB 3: BUILT-IN CONTENT LIBRARY REFERENCE BROWSER
+         ===================================================================== */}
+      {activeTab === 'library' && (
+        <div className="library-browser-container">
+          <div className="library-controls-row">
             <div className="search-box-wrap">
               <Search size={16} className="search-icon" />
               <input
                 type="text"
-                placeholder="Search Telugu or English words, phrases, sentences..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setPage(1);
-                }}
+                value={librarySearch}
+                onChange={(e) => setLibrarySearch(e.target.value)}
+                placeholder="Search Telugu or English words & expressions..."
               />
             </div>
 
-            {/* Level Selector */}
-            <div className="level-filter-pills">
-              {['ALL', 'BEGINNER', 'INTERMEDIATE', 'ADVANCED'].map((lvl) => (
+            <div className="library-filter-pills">
+              {[
+                { id: 'ALL', label: 'All' },
+                { id: 'WORDS', label: 'Words' },
+                { id: 'PHRASES', label: 'Expressions' },
+                { id: 'SITUATIONS', label: 'Situations' },
+                { id: 'BOOKMARKED', label: 'Saved' },
+              ].map((f) => (
                 <button
-                  key={lvl}
-                  className={`level-pill-btn ${selectedLevel === lvl ? 'active' : ''}`}
-                  onClick={() => {
-                    setSelectedLevel(lvl);
-                    setPage(1);
-                  }}
+                  key={f.id}
+                  type="button"
+                  className={`level-pill-btn ${libraryModeFilter === f.id ? 'active' : ''}`}
+                  onClick={() => setLibraryModeFilter(f.id)}
                 >
-                  {lvl}
+                  {f.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Category Pills (if not in bookmarks) */}
-          {activeSection !== 'bookmarks' && categories.length > 0 && (
-            <div className="categories-scroll-row">
-              <button
-                className={`category-pill-btn ${selectedCategory === 'All' ? 'active' : ''}`}
-                onClick={() => {
-                  setSelectedCategory('All');
-                  setPage(1);
-                }}
-              >
-                All Categories ({totalItems})
-              </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat.name}
-                  className={`category-pill-btn ${selectedCategory === cat.name ? 'active' : ''}`}
-                  onClick={() => {
-                    setSelectedCategory(cat.name);
-                    setPage(1);
-                  }}
-                >
-                  {cat.name} ({cat.count})
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Cards Grid */}
-          {loading ? (
-            <div className="loading-grid-state">
-              <RefreshCw size={32} className="spin-icon text-blue" />
-              <p>Loading words and expressions...</p>
-            </div>
-          ) : items.length > 0 ? (
-            <div className="words-items-grid">
-              {items.map((item) => (
-                <div
-                  key={item.id}
-                  className={`word-card-item ${item.is_learned ? 'card-learned' : ''}`}
-                  onClick={() => openItemDetail(item)}
-                >
-                  <div className="card-top-bar">
-                    <span className="card-cat-badge">{item.category}</span>
-                    <div className="card-actions-group">
-                      <button
-                        className={`btn-action-icon ${item.is_bookmarked ? 'bookmarked' : ''}`}
-                        onClick={(e) => handleToggleBookmark(e, item)}
-                        title={item.is_bookmarked ? 'Remove bookmark' : 'Bookmark this item'}
-                      >
-                        <Bookmark size={16} fill={item.is_bookmarked ? '#8b5cf6' : 'none'} />
-                      </button>
-                      <button
-                        className={`btn-action-icon ${item.is_learned ? 'learned' : ''}`}
-                        onClick={(e) => handleToggleLearned(e, item)}
-                        title={item.is_learned ? 'Marked as learned' : 'Mark as learned'}
-                      >
-                        <CheckCircle2 size={16} className={item.is_learned ? 'text-green' : ''} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="card-main-content">
-                    {/* Telugu Source Text */}
-                    <div className="telugu-block">
-                      <span className="telugu-main-text">{item.telugu_text}</span>
-                      {item.telugu_transliteration && (
-                        <span className="telugu-phonetic">({item.telugu_transliteration})</span>
-                      )}
-                    </div>
-
-                    <ArrowRight size={16} className="arrow-convert-icon" />
-
-                    {/* English Natural Translation */}
-                    <div className="english-block">
-                      <div className="english-header-row">
-                        <h4 className="english-main-text">{item.english_text}</h4>
-                        <button
-                          type="button"
-                          className="btn-tiny-speak"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            speak(item.english_text);
-                          }}
-                          title="Listen to native pronunciation"
-                        >
-                          <Volume2 size={15} />
-                        </button>
-                      </div>
-
-                      {item.english_definition && (
-                        <p className="english-def-snippet">{item.english_definition}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Contextual Nuance / Examples Snippet */}
-                  {item.when_to_use && (
-                    <div className="when-to-use-snippet">
-                      <Lightbulb size={13} className="text-amber" />
-                      <span>{item.when_to_use}</span>
-                    </div>
-                  )}
-
-                  {/* Card Footer */}
-                  <div className="card-footer-bar">
-                    <DifficultyBadge level={item.level} showIcon={false} />
-                    <span className="deep-dive-link">
-                      <span>Practice with AI Tutor</span>
-                      <ChevronRight size={14} />
-                    </span>
-                  </div>
-                </div>
-              ))}
+          {loadingLibrary ? (
+            <div className="loading-state-box">
+              <RefreshCw size={28} className="spin-icon text-blue" />
+              <p>Loading library items...</p>
             </div>
           ) : (
-            <div className="empty-results-box">
-              <BookOpen size={40} className="text-muted" />
-              <h3>No items found</h3>
-              <p>Try clearing your search query or selecting a different category filter.</p>
-            </div>
-          )}
-
-          {/* Pagination Bar */}
-          {totalPages > 1 && (
-            <div className="pagination-bar">
-              <button
-                className="btn-page-nav"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-              >
-                Previous
-              </button>
-              <span className="page-indicator">
-                Page {page} of {totalPages}
-              </span>
-              <button
-                className="btn-page-nav"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page === totalPages}
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* DETAIL MODAL / DEEP-DIVE PRACTICE DRAWER */}
-      {activeItem && (
-        <div className="item-detail-modal-overlay" onClick={() => setActiveItem(null)}>
-          <div className="item-detail-modal" onClick={(e) => e.stopPropagation()}>
-            {/* Modal Header */}
-            <div className="modal-header-bar">
-              <div className="modal-title-group">
-                <span className="modal-cat-tag">{activeItem.category}</span>
-                <DifficultyBadge level={activeItem.level} />
-              </div>
-              <button className="btn-close-modal" onClick={() => setActiveItem(null)}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="modal-body-scroll">
-              {/* Tutor Introduction Box */}
-              <div className="modal-tutor-banner">
-                <RobotTutor size="small" showMessage={true} />
-              </div>
-
-              {/* Main Bilingual Expression Display */}
-              <div className="modal-main-expression-card">
-                <div className="telugu-large-view">
-                  <span className="script-label">తెలుగు వ్యక్తీకరణ:</span>
-                  <h3 className="telugu-large-text">{activeItem.telugu_text}</h3>
-                  {activeItem.telugu_transliteration && (
-                    <span className="telugu-romanized">({activeItem.telugu_transliteration})</span>
-                  )}
-                </div>
-
-                <div className="english-large-view">
-                  <span className="script-label">Natural English:</span>
-                  <div className="english-title-line">
-                    <h2 className="english-large-text">"{activeItem.english_text}"</h2>
+            <div className="words-items-grid">
+              {libraryItems.map((item) => (
+                <div key={item.id} className={`word-card-item ${item.is_learned ? 'card-learned' : ''}`}>
+                  <div className="card-top-bar">
+                    <span className="card-cat-badge">{item.category}</span>
                     <button
-                      className="btn-large-audio"
-                      onClick={() => speak(activeItem.english_text)}
-                      title="Listen to native pronunciation"
+                      type="button"
+                      className={`btn-action-icon ${item.is_bookmarked ? 'bookmarked' : ''}`}
+                      onClick={() => handleToggleBookmarkLibrary(item.id)}
+                      title="Bookmark"
                     >
-                      <Volume2 size={18} />
-                      <span>Listen</span>
+                      <Bookmark size={16} fill={item.is_bookmarked ? '#8b5cf6' : 'none'} />
                     </button>
                   </div>
-                  {activeItem.pronunciation && (
-                    <span className="phonetic-text">{activeItem.pronunciation}</span>
-                  )}
-                  {activeItem.english_definition && (
-                    <p className="english-meaning-text">{activeItem.english_definition}</p>
-                  )}
-                </div>
-              </div>
-
-              {/* When & Where to Use It */}
-              {activeItem.when_to_use && (
-                <div className="modal-section-box when-box">
-                  <div className="section-title-line">
-                    <Lightbulb size={16} className="text-amber" />
-                    <h4>When and Where to Use It</h4>
-                  </div>
-                  <p>{activeItem.when_to_use}</p>
-                </div>
-              )}
-
-              {/* Contextual Alternatives (Crucial for phrases with multiple meanings) */}
-              {activeItem.contextual_alternatives_json?.length > 0 && (
-                <div className="modal-section-box context-box">
-                  <div className="section-title-line">
-                    <Sparkles size={16} className="text-purple" />
-                    <h4>Contextual Alternatives & Differences</h4>
-                  </div>
-                  <div className="context-alternatives-list">
-                    {activeItem.contextual_alternatives_json.map((alt, idx) => (
-                      <div key={idx} className="context-alt-card">
-                        <div className="alt-top">
-                          <strong>"{alt.english}"</strong>
-                          <button
-                            className="btn-tiny-speak"
-                            onClick={() => speak(alt.english)}
-                          >
-                            <Volume2 size={13} />
-                          </button>
-                        </div>
-                        <p className="alt-desc">{alt.context}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Word-by-Word Meaning Breakdown (Especially for Sentences) */}
-              {activeItem.word_by_word_json?.length > 0 && (
-                <div className="modal-section-box word-by-word-box">
-                  <div className="section-title-line">
-                    <Layers size={16} className="text-blue" />
-                    <h4>Word-by-Word Breakdown</h4>
-                  </div>
-                  <div className="word-by-word-table">
-                    {activeItem.word_by_word_json.map((w, idx) => (
-                      <div key={idx} className="wbw-pair">
-                        <span className="wbw-telugu">{w.telugu}</span>
-                        <span className="wbw-arrow">↓</span>
-                        <span className="wbw-english">{w.english}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Sentence Structure & Grammar Pattern */}
-              {activeItem.sentence_structure && (
-                <div className="modal-section-box structure-box">
-                  <div className="section-title-line">
-                    <BookOpen size={16} className="text-blue" />
-                    <h4>Sentence Structure & Grammar Pattern</h4>
-                  </div>
-                  <p>{activeItem.sentence_structure}</p>
-                </div>
-              )}
-
-              {/* Practical Examples */}
-              {activeItem.examples_json?.length > 0 && (
-                <div className="modal-section-box examples-box">
-                  <div className="section-title-line">
-                    <CheckCircle2 size={16} className="text-green" />
-                    <h4>Practical Daily Examples</h4>
-                  </div>
-                  <div className="modal-examples-list">
-                    {activeItem.examples_json.map((ex, idx) => (
-                      <div key={idx} className="example-row-card">
-                        <div className="example-eng-line">
-                          <span>"{ex.english}"</span>
-                          <button
-                            className="btn-tiny-speak"
-                            onClick={() => speak(ex.english)}
-                          >
-                            <Volume2 size={13} />
-                          </button>
-                        </div>
-                        <span className="example-tel-line">{ex.telugu}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Practical Conversation / Dialogue (for Situations) */}
-              {activeItem.dialogue_json?.length > 0 && (
-                <div className="modal-section-box dialogue-box">
-                  <div className="section-title-line">
-                    <MessagesSquare size={16} className="text-blue" />
-                    <h4>Real-Life Conversation Dialogue</h4>
-                  </div>
-                  <div className="dialogue-chat-list">
-                    {activeItem.dialogue_json.map((turn, idx) => (
-                      <div key={idx} className="dialogue-turn-bubble">
-                        <span className="speaker-tag">{turn.speaker}:</span>
-                        <span className="speaker-text">"{turn.text}"</span>
-                        <button
-                          className="btn-tiny-speak"
-                          onClick={() => speak(turn.text)}
-                        >
-                          <Volume2 size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Common Mistakes (Literal Translation Traps) */}
-              {activeItem.common_mistakes_json?.length > 0 && (
-                <div className="modal-section-box mistakes-box">
-                  <div className="section-title-line">
-                    <AlertTriangle size={16} className="text-amber" />
-                    <h4>Common Mistakes (Literal Translation Pitfalls)</h4>
-                  </div>
-                  <div className="mistakes-list">
-                    {activeItem.common_mistakes_json.map((m, idx) => (
-                      <div key={idx} className="mistake-item">
-                        <div className="compare-line">
-                          <span className="text-red strike">❌ {m.incorrect}</span>
-                          <span className="text-green bold">✔️ {m.correct}</span>
-                        </div>
-                        <p className="mistake-reason">{m.reason}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Synonyms / Related terms */}
-              {activeItem.synonyms_json?.length > 0 && (
-                <div className="modal-section-box synonyms-box">
-                  <span className="box-mini-label">Synonyms & Related Expressions:</span>
-                  <div className="synonyms-tags-wrap">
-                    {activeItem.synonyms_json.map((syn, idx) => (
-                      <span key={idx} className="synonym-tag">{syn}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* INTERACTIVE PRACTICE: CREATE YOUR OWN SENTENCE */}
-              <div className="sentence-creator-card">
-                <div className="creator-header">
-                  <Sparkles size={18} className="text-blue" />
-                  <h4>Practice with Tutor: Create Your Own Sentence</h4>
-                </div>
-                <p className="creator-instructions">
-                  Create a natural sentence using <strong>"{activeItem.english_text}"</strong>. Speak using your microphone or type it below to get instant AI tutor feedback!
-                </p>
-
-                <div className="creator-input-bar">
-                  <button
-                    type="button"
-                    className={`btn-creator-mic ${isListening ? 'listening' : ''}`}
-                    onClick={isListening ? stopListening : startListening}
-                    disabled={checkingSentence}
-                  >
-                    {isListening ? <MicOff size={16} /> : <Mic size={16} />}
-                    <span>{isListening ? 'Stop' : 'Speak'}</span>
-                  </button>
-
-                  <input
-                    type="text"
-                    className="creator-text-input"
-                    value={userSentence}
-                    onChange={(e) => setUserSentence(e.target.value)}
-                    placeholder={`e.g. Try making a sentence with ${activeItem.english_text}...`}
-                    disabled={checkingSentence}
-                  />
-
-                  <button
-                    type="button"
-                    className="btn-creator-submit"
-                    onClick={handleCheckSentence}
-                    disabled={checkingSentence || !userSentence.trim()}
-                  >
-                    <Send size={15} />
-                    <span>{checkingSentence ? 'Checking...' : 'Check'}</span>
-                  </button>
-                </div>
-
-                {sentenceFeedback && (
-                  <div className={`creator-feedback-box ${sentenceFeedback.is_correct ? 'pass' : 'review'}`}>
-                    <div className="feedback-top">
-                      {sentenceFeedback.is_correct ? (
-                        <>
-                          <CheckCircle2 size={18} className="text-green" />
-                          <strong>Excellent! Score: {Math.round(sentenceFeedback.score)}%</strong>
-                        </>
-                      ) : (
-                        <>
-                          <AlertTriangle size={18} className="text-amber" />
-                          <strong>Correction Suggested:</strong>
-                        </>
-                      )}
+                  <div className="card-main-content">
+                    <span className="telugu-main-text">{item.telugu_text}</span>
+                    <div className="english-header-row">
+                      <h4 className="english-main-text">{item.english_text}</h4>
+                      <button
+                        type="button"
+                        className="btn-tiny-speak"
+                        onClick={() => speak(item.english_text)}
+                        title="Listen"
+                      >
+                        <Volume2 size={15} />
+                      </button>
                     </div>
-                    <p className="feedback-corrected">"{sentenceFeedback.corrected_sentence}"</p>
-                    <p className="feedback-text">{sentenceFeedback.feedback}</p>
-                    <p className="feedback-encouragement">{sentenceFeedback.encouragement}</p>
+                    {item.english_definition && (
+                      <p className="english-def-snippet">{item.english_definition}</p>
+                    )}
+                    {item.valid_alternatives_json?.length > 0 && (
+                      <p className="alts-snippet">
+                        Also valid: {item.valid_alternatives_json.slice(0, 3).join(', ')}
+                      </p>
+                    )}
                   </div>
-                )}
-              </div>
+                  <div className="card-footer-bar">
+                    <DifficultyBadge level={item.level} showIcon={false} />
+                    {item.is_learned && (
+                      <span className="learned-tag">
+                        <CheckCircle2 size={13} /> Learned
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-
-            {/* Modal Bottom Action Bar */}
-            <div className="modal-bottom-actions">
-              <button
-                className={`btn-modal-action ${activeItem.is_bookmarked ? 'active' : ''}`}
-                onClick={(e) => handleToggleBookmark(e, activeItem)}
-              >
-                <Bookmark size={16} />
-                <span>{activeItem.is_bookmarked ? 'Bookmarked' : 'Bookmark'}</span>
-              </button>
-
-              <button
-                className={`btn-modal-action primary ${activeItem.is_learned ? 'active' : ''}`}
-                onClick={(e) => handleToggleLearned(e, activeItem)}
-              >
-                <CheckCircle2 size={16} />
-                <span>{activeItem.is_learned ? 'Marked as Learned' : 'Mark as Learned'}</span>
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </div>

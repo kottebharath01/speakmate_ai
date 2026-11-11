@@ -1,15 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.database.session import engine, Base, SessionLocal
+from app.database.session import engine, Base, SessionLocal, ensure_schema_columns
 from app.database.seed_data import seed_database
 from app.database.seed_words_expressions import seed_words_expressions
 from app.api import (
     auth, profile, situations, ai, learning, progress, interview, words_expressions
 )
 
-# Create tables
+# Create tables & run safe column migrations
 Base.metadata.create_all(bind=engine)
+ensure_schema_columns(engine)
 
 # Seed initial data
 with SessionLocal() as db:

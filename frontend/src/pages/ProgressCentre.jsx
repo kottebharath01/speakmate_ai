@@ -3,15 +3,17 @@ import { progressAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useTutor } from '../context/TutorContext';
 import { DifficultyBadge } from '../components/DifficultyBadge';
+import { StreakCalendar } from '../components/StreakCalendar';
 import {
   TrendingUp, Clock, CheckCircle2, AlertOctagon, Award, Flame,
-  BarChart3, Calendar, Layers, ShieldCheck
+  BarChart3, Calendar, Layers, ShieldCheck, Languages
 } from 'lucide-react';
 
 export function ProgressCentre() {
   const { profile } = useAuth();
   const { setRobotState } = useTutor();
   const [stats, setStats] = useState(null);
+  const [streakData, setStreakData] = useState(null);
   const [progressRecords, setProgressRecords] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -20,11 +22,13 @@ export function ProgressCentre() {
 
     const loadProgress = async () => {
       try {
-        const [statsRes, recordsRes] = await Promise.all([
+        const [statsRes, streakRes, recordsRes] = await Promise.all([
           progressAPI.getStats(),
+          progressAPI.getStreak(),
           progressAPI.getRecords(),
         ]);
         setStats(statsRes.data);
+        setStreakData(streakRes.data);
         setProgressRecords(recordsRes.data);
       } catch (err) {
         console.warn('Progress fetch error:', err);
@@ -38,9 +42,11 @@ export function ProgressCentre() {
 
   const currentLevel = profile?.current_level || stats?.current_level || 'BEGINNER';
   const totalCompleted = stats?.total_situations_completed || 0;
+  const wordsCompleted = stats?.words_completed_count || 0;
   const totalMistakes = stats?.total_mistakes_tracked || 0;
   const resolvedMistakes = stats?.total_mistakes_resolved || 0;
   const resolutionRate = totalMistakes > 0 ? Math.round((resolvedMistakes / totalMistakes) * 100) : 100;
+  const currentStreak = streakData?.current_streak ?? stats?.streak_count ?? profile?.streak_count ?? 0;
 
   return (
     <div className="progress-centre-page">
@@ -48,7 +54,7 @@ export function ProgressCentre() {
         <div>
           <h2>English Learning Progress Centre</h2>
           <p className="subtitle">
-            Transparent tracking of speaking practice, grammar accuracy, and difficulty progression.
+            Independent tracking for Words & Expressions and Speaking Practice sessions.
           </p>
         </div>
       </div>
@@ -57,14 +63,12 @@ export function ProgressCentre() {
       <div className="progress-kpi-grid">
         <div className="kpi-card">
           <div className="kpi-icon bg-blue">
-            <ShieldCheck size={22} />
+            <Languages size={22} />
           </div>
           <div className="kpi-info">
-            <span className="kpi-title">Current Level</span>
-            <div className="kpi-badge-wrap">
-              <DifficultyBadge level={currentLevel} />
-            </div>
-            <span className="kpi-note">Adaptive engine tracking</span>
+            <span className="kpi-title">Words & Expressions</span>
+            <span className="kpi-value">{wordsCompleted}</span>
+            <span className="kpi-note">{stats?.words_sessions_completed || 0} sessions completed</span>
           </div>
         </div>
 
@@ -73,9 +77,9 @@ export function ProgressCentre() {
             <CheckCircle2 size={22} />
           </div>
           <div className="kpi-info">
-            <span className="kpi-title">Situations Practiced</span>
+            <span className="kpi-title">Speaking Practice</span>
             <span className="kpi-value">{totalCompleted}</span>
-            <span className="kpi-note">Real-life conversations</span>
+            <span className="kpi-note">{stats?.speaking_sessions_completed || 0} sessions completed</span>
           </div>
         </div>
 
@@ -85,8 +89,8 @@ export function ProgressCentre() {
           </div>
           <div className="kpi-info">
             <span className="kpi-title">Streak & Points</span>
-            <span className="kpi-value">{profile?.streak_count || 1} Days / {profile?.total_points || 0} pts</span>
-            <span className="kpi-note">Active consistency</span>
+            <span className="kpi-value">{currentStreak} Days / {profile?.total_points ?? 0} pts</span>
+            <span className="kpi-note">Longest: {streakData?.longest_streak ?? 0} Days</span>
           </div>
         </div>
 
@@ -101,6 +105,8 @@ export function ProgressCentre() {
           </div>
         </div>
       </div>
+
+      <StreakCalendar streakData={streakData} />
 
       {/* Weekly Progress Breakdown Chart */}
       <div className="progress-chart-card">

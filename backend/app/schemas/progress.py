@@ -32,11 +32,15 @@ class ProgressOut(BaseModel):
 class DashboardStatsOut(BaseModel):
     current_level: str
     streak_count: int
+    longest_streak: int = 0
     daily_goal_minutes: int
     minutes_practiced_today: float
     total_situations_completed: int
     total_mistakes_tracked: int
     total_mistakes_resolved: int
     total_points: int
+    words_completed_count: int = 0
+    speaking_sessions_completed: int = 0
+    words_sessions_completed: int = 0
     recent_mistakes: List[MistakeOut]
     weekly_accuracy_trend: List[Dict[str, Any]]

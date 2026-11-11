@@ -35,9 +35,10 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
         user_id=user.id,
         current_level="BEGINNER",
         daily_goal_minutes=15,
-        streak_count=1,
+        streak_count=0,
+        longest_streak=0,
         target_focus="Spoken English & Real Situations",
-        total_points=50
+        total_points=0
     )
     db.add(profile)
     db.commit()

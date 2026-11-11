@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 import random
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,15 +8,23 @@ from sqlalchemy import or_, func
 from app.database.session import get_db
 from app.models.entities import User
 from app.models.words_expressions import (
-    WordItem, WordBookmark, WordProgress, WordExercise
+    WordItem, WordBookmark, WordProgress, WordExercise,
+    WordSession, WordSessionAttempt, UserWordCompletion
 )
 from app.schemas.words_expressions import (
     WordItemOut, WordItemListResponse, CategoryCount,
     DailyFeaturedResponse, WordProgressStatsResponse,
     CheckSentenceRequest, CheckSentenceResponse,
-    WordExerciseOut, ExerciseAnswerRequest, ExerciseAnswerResponse
+    WordExerciseOut, ExerciseAnswerRequest, ExerciseAnswerResponse,
+    ModeCategoryStat, ModeSummaryItem, ModesSummaryResponse,
+    StartWordSessionRequest, WordSessionStateResponse, WordPromptItem,
+    WordAttemptStateOut, SubmitWordAnswerRequest, SubmitWordAnswerResponse,
+    RepeatWordAnswerRequest, RepeatWordAnswerResponse, WordSessionHistoryEntry
 )
 from app.services.ai_service import ai_service
+from app.services.word_tutor_service import word_tutor_service
+from app.services.streak_service import streak_service, parse_local_date
+from app.utils.text_utils import normalize_text
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/words-expressions", tags=["Words & Expressions"])
@@ -38,17 +46,27 @@ def _hydrate_item_user_state(item: WordItem, user_id: Optional[int], db: Session
             WordProgress.user_id == user_id,
             WordProgress.item_id == item.id
         ).first()
+        completed_rec = db.query(UserWordCompletion).filter(
+            UserWordCompletion.user_id == user_id,
+            UserWordCompletion.item_id == item.id
+        ).first()
         if progress:
-            is_learned = progress.is_learned
+            is_learned = progress.is_learned or (completed_rec is not None)
             practice_count = progress.practice_count
+        elif completed_rec is not None:
+            is_learned = True
+            practice_count = 1
 
     return WordItemOut(
         id=item.id,
+        content_uid=item.content_uid,
         section=item.section,
+        mode=item.mode,
         category=item.category,
         level=item.level,
         telugu_text=item.telugu_text,
         english_text=item.english_text,
+        valid_alternatives_json=item.valid_alternatives_json,
         telugu_transliteration=item.telugu_transliteration,
         english_definition=item.english_definition,
         pronunciation=item.pronunciation,
@@ -416,4 +434,595 @@ async def check_custom_sentence(
         corrected_sentence=corrected,
         feedback=explanation,
         encouragement=encouragement
+    )
+
+
+# =========================================================================
+# AI TUTOR-LED WORDS & EXPRESSIONS GUIDED SESSION ENDPOINTS
+# =========================================================================
+
+MODE_META = {
+    "words": {
+        "label": "Words",
+        "description": "Individual everyday English words with Telugu meanings, multiple synonyms & real usage.",
+    },
+    "expressions": {
+        "label": "Expressions",
+        "description": "Daily conversational phrases, office expressions, complete sentences & interview idioms.",
+    },
+    "situation_expressions": {
+        "label": "Situation Expressions",
+        "description": "Topic-based spoken expressions across Daily Life, Office, Travel, Shopping, Restaurant & Interviews.",
+    },
+}
+
+
+def _to_prompt_item(item: Optional[WordItem]) -> Optional[WordPromptItem]:
+    if not item:
+        return None
+    return WordPromptItem(
+        id=item.id,
+        content_uid=item.content_uid,
+        mode=item.mode or "words",
+        category=item.category,
+        level=item.level,
+        telugu_text=item.telugu_text,
+        telugu_transliteration=item.telugu_transliteration,
+        pronunciation=item.pronunciation,
+        part_of_speech=item.part_of_speech,
+        prompt_question="How do you say this in English?",
+    )
+
+
+def _get_eligible_items_for_user(
+    db: Session,
+    user_id: int,
+    mode: str,
+    category: str = "All",
+    is_revision: bool = False,
+) -> List[WordItem]:
+    """
+    Selects eligible learning items for a mode & category.
+    - New learning (is_revision=False): strictly excludes any already-completed item ID
+      OR equivalent normalized_english expression across categories for this user.
+    - Revision (is_revision=True): selects previously completed items cleanly separated from new learning.
+    """
+    completions = db.query(UserWordCompletion).filter(UserWordCompletion.user_id == user_id).all()
+    completed_ids = {c.item_id for c in completions}
+    completed_norms = {c.normalized_english for c in completions if c.normalized_english}
+
+    query = db.query(WordItem).filter(WordItem.mode == mode)
+    if category and category != "All":
+        query = query.filter(WordItem.category == category)
+
+    candidates = query.order_by(WordItem.id.asc()).all()
+    eligible: List[WordItem] = []
+    seen_norms = set()
+
+    for item in candidates:
+        norm = item.normalized_english or normalize_text(item.english_text)
+        if is_revision:
+            if item.id in completed_ids and norm not in seen_norms:
+                eligible.append(item)
+                seen_norms.add(norm)
+        else:
+            # Duplicate prevention across both exact ID and normalized equivalent text
+            if item.id in completed_ids or (norm and norm in completed_norms) or (norm and norm in seen_norms):
+                continue
+            eligible.append(item)
+            if norm:
+                seen_norms.add(norm)
+
+    return eligible
+
+
+def _build_session_state(db: Session, session: WordSession) -> WordSessionStateResponse:
+    current_item_obj = None
+    if session.status == "active" and session.current_index < len(session.item_ids_json):
+        item_id = session.item_ids_json[session.current_index]
+        current_item_obj = db.query(WordItem).filter(WordItem.id == item_id).first()
+
+    # Check if current item has an incomplete attempt awaiting repetition 1/2 or 2/2
+    pending_attempt = None
+    if current_item_obj:
+        pending_attempt = (
+            db.query(WordSessionAttempt)
+            .filter(
+                WordSessionAttempt.session_id == session.id,
+                WordSessionAttempt.item_id == current_item_obj.id,
+                WordSessionAttempt.item_completed == False,
+            )
+            .order_by(WordSessionAttempt.id.desc())
+            .first()
+        )
+
+    return WordSessionStateResponse(
+        id=session.id,
+        mode=session.mode,
+        category=session.category,
+        daily_target=session.daily_target,
+        completed_count=session.completed_count,
+        current_index=session.current_index,
+        status=session.status,
+        is_revision=session.is_revision,
+        local_date=session.local_date,
+        current_item=_to_prompt_item(current_item_obj),
+        pending_attempt=WordAttemptStateOut.model_validate(pending_attempt) if pending_attempt else None,
+        started_at=session.started_at,
+        completed_at=session.completed_at,
+    )
+
+
+def _record_item_completion_and_advance(
+    db: Session,
+    user: User,
+    session: WordSession,
+    item: WordItem,
+) -> Dict[str, Any]:
+    """Marks item completed (respecting revision separation) and checks session completion."""
+    if not session.is_revision:
+        norm = item.normalized_english or normalize_text(item.english_text)
+        existing_comp = (
+            db.query(UserWordCompletion)
+            .filter(UserWordCompletion.user_id == user.id, UserWordCompletion.item_id == item.id)
+            .first()
+        )
+        if not existing_comp:
+            db.add(
+                UserWordCompletion(
+                    user_id=user.id,
+                    item_id=item.id,
+                    normalized_english=norm,
+                    mode=item.mode or session.mode,
+                )
+            )
+        # Also mirror learned marker in WordProgress
+        wp = (
+            db.query(WordProgress)
+            .filter(WordProgress.user_id == user.id, WordProgress.item_id == item.id)
+            .first()
+        )
+        if not wp:
+            db.add(WordProgress(user_id=user.id, item_id=item.id, is_learned=True, practice_count=1))
+        else:
+            wp.is_learned = True
+            wp.practice_count += 1
+            wp.last_practiced_at = datetime.utcnow()
+
+    session.completed_count += 1
+    session.current_index += 1
+
+    if user.profile:
+        user.profile.total_points += 10
+
+    session_completed = session.completed_count >= session.daily_target
+    streak_info = None
+    next_item_obj = None
+
+    if session_completed:
+        session.status = "completed"
+        session.completed_at = datetime.utcnow()
+        db.commit()
+        streak_info = streak_service.record_session_completion(
+            db, user.id, "words", session.local_date
+        )
+    else:
+        if session.current_index < len(session.item_ids_json):
+            next_id = session.item_ids_json[session.current_index]
+            next_item_obj = db.query(WordItem).filter(WordItem.id == next_id).first()
+        db.commit()
+
+    return {
+        "session_completed": session_completed,
+        "next_item": _to_prompt_item(next_item_obj),
+        "streak_info": streak_info,
+    }
+
+
+@router.get("/modes/summary", response_model=ModesSummaryResponse)
+def get_modes_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    completions = db.query(UserWordCompletion).filter(UserWordCompletion.user_id == current_user.id).all()
+    completed_ids = {c.item_id for c in completions}
+    completed_norms = {c.normalized_english for c in completions if c.normalized_english}
+
+    mode_summaries = []
+    for mode_key, meta in MODE_META.items():
+        all_mode_items = db.query(WordItem).filter(WordItem.mode == mode_key).order_by(WordItem.id.asc()).all()
+        cat_totals: dict = {}
+        cat_eligible: dict = {}
+
+        seen_mode_norms = set()
+        for item in all_mode_items:
+            cat_totals[item.category] = cat_totals.get(item.category, 0) + 1
+            norm = item.normalized_english or normalize_text(item.english_text)
+            is_done = item.id in completed_ids or (norm in completed_norms) or (norm in seen_mode_norms)
+            if not is_done:
+                cat_eligible[item.category] = cat_eligible.get(item.category, 0) + 1
+                if norm:
+                    seen_mode_norms.add(norm)
+
+        cat_stats = [
+            ModeCategoryStat(
+                name=cat,
+                total_count=cat_totals[cat],
+                remaining_new_count=cat_eligible.get(cat, 0),
+            )
+            for cat in sorted(cat_totals.keys())
+        ]
+
+        mode_summaries.append(
+            ModeSummaryItem(
+                mode=mode_key,
+                label=meta["label"],
+                description=meta["description"],
+                total_items=len(all_mode_items),
+                remaining_new_items=sum(c.remaining_new_count for c in cat_stats),
+                categories=cat_stats,
+            )
+        )
+
+    return ModesSummaryResponse(
+        modes=mode_summaries,
+        total_learned_by_user=len(completed_ids),
+    )
+
+
+@router.post("/sessions/start", response_model=WordSessionStateResponse)
+def start_word_session(
+    req: StartWordSessionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if req.mode not in MODE_META:
+        raise HTTPException(status_code=400, detail="Invalid mode. Choose 'words', 'expressions', or 'situation_expressions'.")
+    if req.daily_target < 1 or req.daily_target > 50:
+        raise HTTPException(status_code=400, detail="Daily target must be between 1 and 50 items.")
+
+    category = req.category or "All"
+    eligible = _get_eligible_items_for_user(
+        db=db,
+        user_id=current_user.id,
+        mode=req.mode,
+        category=category,
+        is_revision=req.is_revision,
+    )
+
+    if len(eligible) < req.daily_target:
+        label = "completed items available to revise" if req.is_revision else "eligible new items remaining"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {len(eligible)} {label} for mode '{MODE_META[req.mode]['label']}' ({category}). "
+                   f"Please lower your target to {len(eligible)} or fewer, choose another category, or switch to Revision mode."
+        )
+
+    selected_items = eligible[:req.daily_target]
+    local_date_str = parse_local_date(req.local_date).isoformat()
+
+    session = WordSession(
+        user_id=current_user.id,
+        mode=req.mode,
+        category=category,
+        daily_target=req.daily_target,
+        completed_count=0,
+        item_ids_json=[item.id for item in selected_items],
+        current_index=0,
+        status="active",
+        is_revision=req.is_revision,
+        local_date=local_date_str,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    return _build_session_state(db, session)
+
+
+@router.get("/sessions/active", response_model=Optional[WordSessionStateResponse])
+def get_active_word_session(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(WordSession)
+        .filter(WordSession.user_id == current_user.id, WordSession.status == "active")
+        .order_by(WordSession.id.desc())
+        .first()
+    )
+    if not session:
+        return None
+    return _build_session_state(db, session)
+
+
+@router.get("/sessions/history", response_model=List[WordSessionHistoryEntry])
+def get_word_sessions_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    sessions = (
+        db.query(WordSession)
+        .filter(WordSession.user_id == current_user.id)
+        .order_by(WordSession.started_at.desc())
+        .limit(30)
+        .all()
+    )
+    history = []
+    for s in sessions:
+        attempts = (
+            db.query(WordSessionAttempt)
+            .filter(WordSessionAttempt.session_id == s.id, WordSessionAttempt.user_id == current_user.id)
+            .order_by(WordSessionAttempt.created_at.asc())
+            .all()
+        )
+        history.append(
+            WordSessionHistoryEntry(
+                id=s.id,
+                mode=s.mode,
+                category=s.category,
+                daily_target=s.daily_target,
+                completed_count=s.completed_count,
+                status=s.status,
+                is_revision=s.is_revision,
+                local_date=s.local_date,
+                started_at=s.started_at,
+                completed_at=s.completed_at,
+                attempts=[WordAttemptStateOut.model_validate(a) for a in attempts],
+            )
+        )
+    return history
+
+
+@router.get("/sessions/{session_id}", response_model=WordSessionStateResponse)
+def get_word_session_by_id(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(WordSession)
+        .filter(WordSession.id == session_id, WordSession.user_id == current_user.id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+    return _build_session_state(db, session)
+
+
+@router.post("/sessions/{session_id}/abandon")
+def abandon_word_session(
+    session_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(WordSession)
+        .filter(WordSession.id == session_id, WordSession.user_id == current_user.id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+    if session.status == "active":
+        session.status = "abandoned"
+        db.commit()
+    return {"status": session.status, "session_id": session.id}
+
+
+@router.post("/sessions/{session_id}/answer", response_model=SubmitWordAnswerResponse)
+def submit_word_session_answer(
+    session_id: int,
+    req: SubmitWordAnswerRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(WordSession)
+        .filter(WordSession.id == session_id, WordSession.user_id == current_user.id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+    if session.status != "active":
+        raise HTTPException(status_code=400, detail="This session is already completed.")
+    if session.current_index >= len(session.item_ids_json):
+        raise HTTPException(status_code=400, detail="All items in this session have been completed.")
+
+    expected_item_id = session.item_ids_json[session.current_index]
+    if req.item_id != expected_item_id:
+        raise HTTPException(status_code=400, detail="Item mismatch with current session step.")
+
+    item = db.query(WordItem).filter(WordItem.id == expected_item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    if not req.answer or not req.answer.strip():
+        raise HTTPException(status_code=400, detail="Please speak or type your English answer.")
+
+    # Guard against bypassing incomplete correction repetitions
+    existing_pending = (
+        db.query(WordSessionAttempt)
+        .filter(
+            WordSessionAttempt.session_id == session.id,
+            WordSessionAttempt.item_id == expected_item_id,
+            WordSessionAttempt.item_completed == False,
+        )
+        .first()
+    )
+    if existing_pending:
+        raise HTTPException(
+            status_code=400,
+            detail="Please complete the 2 required repetitions for the current item before submitting a new answer.",
+        )
+
+    # Evaluate answer semantically with valid alternatives support
+    eval_result = word_tutor_service.evaluate_answer(item, req.answer)
+    is_correct = eval_result["is_correct"]
+
+    attempt = WordSessionAttempt(
+        session_id=session.id,
+        user_id=current_user.id,
+        item_id=item.id,
+        telugu_text=item.telugu_text,
+        original_answer=req.answer.strip(),
+        is_correct=is_correct,
+        accepted_answer=eval_result["accepted_answer"],
+        valid_alternatives_json=eval_result["valid_alternatives"],
+        evaluation_feedback=eval_result["feedback"],
+        correction_details=eval_result["correction_details"],
+        example_sentence=eval_result["example_sentence"],
+        repetition_required=not is_correct,
+        repetition_success_count=0,
+        repetition_history_json=[],
+        item_completed=is_correct,
+    )
+    db.add(attempt)
+    db.commit()
+    db.refresh(attempt)
+
+    if is_correct:
+        adv = _record_item_completion_and_advance(db, current_user, session, item)
+        return SubmitWordAnswerResponse(
+            attempt_id=attempt.id,
+            is_correct=True,
+            accepted_answer=eval_result["accepted_answer"],
+            valid_alternatives=eval_result["valid_alternatives"],
+            evaluation_feedback=eval_result["feedback"],
+            correction_details=None,
+            example_sentence=eval_result["example_sentence"],
+            repetition_required=False,
+            repetitions_completed=0,
+            repetitions_required=0,
+            item_completed=True,
+            session_completed=adv["session_completed"],
+            completed_count=session.completed_count,
+            daily_target=session.daily_target,
+            next_item=adv["next_item"],
+            streak_info=adv["streak_info"],
+        )
+
+    # Incorrect answer -> require exact 2 repetitions (1/2, 2/2)
+    return SubmitWordAnswerResponse(
+        attempt_id=attempt.id,
+        is_correct=False,
+        accepted_answer=eval_result["accepted_answer"],
+        valid_alternatives=eval_result["valid_alternatives"],
+        evaluation_feedback=eval_result["feedback"],
+        correction_details=eval_result["correction_details"],
+        example_sentence=eval_result["example_sentence"],
+        repetition_required=True,
+        repetitions_completed=0,
+        repetitions_required=2,
+        item_completed=False,
+        session_completed=False,
+        completed_count=session.completed_count,
+        daily_target=session.daily_target,
+        next_item=None,
+        streak_info=None,
+    )
+
+
+@router.post("/sessions/{session_id}/repeat", response_model=RepeatWordAnswerResponse)
+def submit_word_session_repeat(
+    session_id: int,
+    req: RepeatWordAnswerRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(WordSession)
+        .filter(WordSession.id == session_id, WordSession.user_id == current_user.id)
+        .first()
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+    if session.status != "active":
+        raise HTTPException(status_code=400, detail="Session already completed.")
+
+    attempt = (
+        db.query(WordSessionAttempt)
+        .filter(
+            WordSessionAttempt.id == req.attempt_id,
+            WordSessionAttempt.session_id == session.id,
+            WordSessionAttempt.user_id == current_user.id,
+        )
+        .first()
+    )
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt record not found")
+    if attempt.item_completed:
+        raise HTTPException(status_code=400, detail="This item is already completed.")
+
+    rep_eval = word_tutor_service.evaluate_repetition(
+        target_answer=attempt.accepted_answer,
+        valid_alternatives=attempt.valid_alternatives_json or [],
+        repeated_text=req.repeated_answer,
+    )
+
+    history = list(attempt.repetition_history_json or [])
+    history.append({
+        "attempt_text": req.repeated_answer.strip(),
+        "is_successful": rep_eval["is_successful"],
+        "accuracy": rep_eval["accuracy_score"],
+    })
+    attempt.repetition_history_json = history
+
+    if not rep_eval["is_successful"]:
+        db.commit()
+        return RepeatWordAnswerResponse(
+            attempt_id=attempt.id,
+            is_successful=False,
+            accuracy_score=rep_eval["accuracy_score"],
+            feedback=rep_eval["feedback"],
+            accepted_answer=attempt.accepted_answer,
+            repetitions_completed=attempt.repetition_success_count,
+            repetitions_required=2,
+            item_completed=False,
+            session_completed=False,
+            completed_count=session.completed_count,
+            daily_target=session.daily_target,
+            next_item=None,
+            streak_info=None,
+        )
+
+    # Successful repetition -> increment 1 -> 2
+    attempt.repetition_success_count += 1
+
+    if attempt.repetition_success_count < 2:
+        db.commit()
+        return RepeatWordAnswerResponse(
+            attempt_id=attempt.id,
+            is_successful=True,
+            accuracy_score=rep_eval["accuracy_score"],
+            feedback="Great! First repetition (1/2) complete. Now repeat it one more time (2/2) to lock it in.",
+            accepted_answer=attempt.accepted_answer,
+            repetitions_completed=attempt.repetition_success_count,
+            repetitions_required=2,
+            item_completed=False,
+            session_completed=False,
+            completed_count=session.completed_count,
+            daily_target=session.daily_target,
+            next_item=None,
+            streak_info=None,
+        )
+
+    # Exact 2/2 repetitions complete -> mark item complete & advance automatically!
+    attempt.item_completed = True
+    item = db.query(WordItem).filter(WordItem.id == attempt.item_id).first()
+    adv = _record_item_completion_and_advance(db, current_user, session, item)
+
+    return RepeatWordAnswerResponse(
+        attempt_id=attempt.id,
+        is_successful=True,
+        accuracy_score=rep_eval["accuracy_score"],
+        feedback="Excellent! Both repetitions (2/2) completed cleanly!",
+        accepted_answer=attempt.accepted_answer,
+        repetitions_completed=2,
+        repetitions_required=2,
+        item_completed=True,
+        session_completed=adv["session_completed"],
+        completed_count=session.completed_count,
+        daily_target=session.daily_target,
+        next_item=adv["next_item"],
+        streak_info=adv["streak_info"],
     )

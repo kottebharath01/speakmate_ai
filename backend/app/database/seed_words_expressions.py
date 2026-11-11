@@ -1,9 +1,15 @@
 from sqlalchemy.orm import Session
 from app.models.words_expressions import WordItem, WordExercise
+from app.database.content_library import FULL_CONTENT_LIBRARY
+from app.utils.text_utils import normalize_text
 
 def seed_words_expressions(db: Session):
-    """Seed comprehensive initial content across all 4 sections if not already seeded."""
-    if db.query(WordItem).count() > 0:
+    """Seed comprehensive initial content and idempotently sync the full learning library."""
+    _backfill_existing_items(db)
+    _sync_full_content_library(db)
+    if db.query(WordExercise).count() == 0:
+        _seed_default_exercises(db)
+    if db.query(WordItem).count() > 35:
         return
 
     items_to_add = []
@@ -892,13 +898,97 @@ def seed_words_expressions(db: Session):
         ]
     })
 
-    # Save all items
+    # Save legacy base items if needed
     for data in items_to_add:
-        item = WordItem(**data)
-        db.add(item)
+        norm = normalize_text(data.get("english_text", ""))
+        existing = db.query(WordItem).filter(WordItem.normalized_english == norm).first()
+        if not existing:
+            item = WordItem(**data, normalized_english=norm)
+            db.add(item)
+    db.commit()
+    _backfill_existing_items(db)
+
+
+def _backfill_existing_items(db: Session):
+    """Ensure every WordItem row has content_uid, mode, and normalized_english populated."""
+    section_to_mode = {
+        "words": "words",
+        "phrases": "expressions",
+        "sentences": "expressions",
+        "situations": "situation_expressions",
+    }
+    all_existing = db.query(WordItem).all()
+    for row in all_existing:
+        changed = False
+        norm = normalize_text(row.english_text)
+        if not row.normalized_english and norm:
+            row.normalized_english = norm
+            changed = True
+        if not row.mode:
+            row.mode = section_to_mode.get(row.section, "expressions")
+            changed = True
+        if not row.content_uid:
+            row.content_uid = f"legacy_{row.mode}_{row.id}"
+            changed = True
+        if changed:
+            db.add(row)
     db.commit()
 
-    # Seed interactive quiz exercises
+
+def _sync_full_content_library(db: Session):
+    """Idempotently inserts or updates structured learning items from content_library."""
+    for entry in FULL_CONTENT_LIBRARY:
+        uid = entry["uid"]
+        norm = normalize_text(entry["english_text"])
+        mode = entry["mode"]
+
+        existing = db.query(WordItem).filter(WordItem.content_uid == uid).first()
+        if not existing:
+            # Also match by normalized English within the same mode to update legacy seeded items cleanly
+            existing = (
+                db.query(WordItem)
+                .filter(WordItem.normalized_english == norm, WordItem.mode == mode)
+                .first()
+            )
+
+        if existing:
+            existing.content_uid = uid
+            existing.mode = mode
+            existing.normalized_english = norm
+            if entry.get("valid_alternatives") is not None:
+                existing.valid_alternatives_json = entry["valid_alternatives"]
+            if entry.get("examples") and not existing.examples_json:
+                existing.examples_json = entry["examples"]
+            db.add(existing)
+        else:
+            new_item = WordItem(
+                content_uid=uid,
+                section=entry["section"],
+                mode=mode,
+                category=entry["category"],
+                level=entry.get("level", "BEGINNER"),
+                telugu_text=entry["telugu_text"],
+                english_text=entry["english_text"],
+                normalized_english=norm,
+                valid_alternatives_json=entry.get("valid_alternatives", []),
+                telugu_transliteration=entry.get("telugu_transliteration"),
+                english_definition=entry.get("english_definition"),
+                pronunciation=entry.get("pronunciation"),
+                part_of_speech=entry.get("part_of_speech"),
+                when_to_use=entry.get("when_to_use"),
+                sentence_structure=entry.get("sentence_structure"),
+                word_by_word_json=entry.get("word_by_word"),
+                contextual_alternatives_json=entry.get("contextual_alternatives"),
+                examples_json=entry.get("examples"),
+                common_mistakes_json=entry.get("mistakes"),
+                synonyms_json=entry.get("synonyms"),
+                dialogue_json=entry.get("dialogue"),
+            )
+            db.add(new_item)
+    db.commit()
+
+
+def _seed_default_exercises(db: Session):
     exercises_to_add = [
         {
             "section": "words",

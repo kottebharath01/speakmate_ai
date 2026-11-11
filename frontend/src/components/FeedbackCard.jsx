@@ -12,6 +12,9 @@ export function FeedbackCard({
   onNextSituation,
   isEvaluatingRepeat,
   repeatResult,
+  repetitionsCompleted = 0,
+  repetitionsRequired = 2,
+  sessionMode = false,
 }) {
   const { speak } = useSpeechSynthesis();
   const [repeatText, setRepeatText] = useState('');
@@ -22,6 +25,7 @@ export function FeedbackCard({
     startListening,
     stopListening,
     resetTranscript,
+    error: speechError,
     isSupported,
   } = useSpeechRecognition();
 
@@ -47,11 +51,17 @@ export function FeedbackCard({
     speak(natural_expression);
   };
 
-  const handleRepeatSubmit = () => {
-    const speechToEvaluate = transcript.trim() || repeatText.trim();
+  const handleRepeatSubmit = async () => {
+    const speechToEvaluate = (transcript || repeatText).trim();
     if (!speechToEvaluate) return;
-    onRepeatEvaluation(speechToEvaluate);
+    if (isListening) stopListening();
+    await onRepeatEvaluation(speechToEvaluate);
+    setRepeatText('');
+    resetTranscript();
   };
+
+  const repsDoneCount = repetitionsCompleted;
+  const canProceedToNext = is_correct || !sessionMode || repsDoneCount >= repetitionsRequired;
 
   return (
     <div className={`feedback-card-container ${is_correct ? 'card-success' : 'card-improvement'}`}>
@@ -199,88 +209,123 @@ export function FeedbackCard({
           </div>
         )}
 
-        {/* SECTION G: Practice Again (Repeat Corrected Sentence) */}
-        <div className="feedback-section section-repeat">
-          <div className="section-title">
-            <span className="section-letter">G</span>
-            <h4>Practice Again – Repeat Corrected Sentence</h4>
-          </div>
-          <p className="repeat-instructions">
-            Speaking reinforces memory! Read the corrected sentence out loud using your microphone:
-          </p>
+        {/* SECTION G: Practice Again (Only shown when corrections are needed; requires 2 repetitions in guided session) */}
+        {!is_correct && (
+          <div className="feedback-section section-repeat">
+            <div className="section-title">
+              <span className="section-letter">G</span>
+              <h4>Practice Again – Repeat Corrected Sentence</h4>
+            </div>
+            <p className="repeat-instructions">
+              Repeat the corrected response out loud or type it <strong>{repetitionsRequired} times</strong> to master it:
+            </p>
 
-          <div className="target-repeat-card">
-            <p className="target-sentence">"{corrected_sentence}"</p>
-          </div>
+            <div className="rep-badges" style={{ marginBottom: '12px' }}>
+              <span
+                className={`rep-badge ${repsDoneCount >= 1 ? 'done' : 'active'}`}
+                data-testid="speaking-rep-1"
+              >
+                {repsDoneCount >= 1 ? <Check size={13} /> : '1'} First repetition: {Math.min(1, repsDoneCount)}/{repetitionsRequired}
+              </span>
+              <span
+                className={`rep-badge ${repsDoneCount >= 2 ? 'done' : repsDoneCount === 1 ? 'active' : ''}`}
+                data-testid="speaking-rep-2"
+              >
+                {repsDoneCount >= 2 ? <Check size={13} /> : '2'} Second repetition: {repsDoneCount}/{repetitionsRequired}
+              </span>
+            </div>
 
-          {/* Repeat Voice Input & Manual Fallback */}
-          <div className="repeat-input-bar">
-            <button
-              type="button"
-              className={`btn-repeat-mic ${isListening ? 'listening' : ''}`}
-              onClick={isListening ? stopListening : startListening}
-              disabled={isEvaluatingRepeat}
-            >
-              <Mic size={18} />
-              <span>{isListening ? 'Stop Speaking' : 'Tap to Repeat Sentence'}</span>
-            </button>
+            <div className="target-repeat-card">
+              <p className="target-sentence">"{corrected_sentence}"</p>
+            </div>
 
-            <input
-              type="text"
-              className="repeat-text-input"
-              value={transcript || repeatText}
-              onChange={(e) => {
-                setRepeatText(e.target.value);
-                if (transcript) resetTranscript();
-              }}
-              placeholder="Your spoken repeat sentence will appear here..."
-              disabled={isEvaluatingRepeat}
-            />
+            {(!isSupported || speechError) && (
+              <div className="voice-fallback-notice" style={{ marginBottom: '10px' }}>
+                {speechError || 'Voice recognition is unavailable here. Type the corrected sentence below.'}
+              </div>
+            )}
 
-            <button
-              type="button"
-              className="btn-repeat-verify"
-              onClick={handleRepeatSubmit}
-              disabled={isEvaluatingRepeat || (!transcript.trim() && !repeatText.trim())}
-            >
-              {isEvaluatingRepeat ? <RotateCw className="spin-icon" size={16} /> : <Check size={16} />}
-              <span>Verify Repeat</span>
-            </button>
-          </div>
+            {/* Repeat Voice Input & Manual Fallback (Hidden once 2/2 succeeded in sessionMode) */}
+            {(!sessionMode || repsDoneCount < repetitionsRequired) && (
+              <div className="repeat-input-bar">
+                <button
+                  type="button"
+                  className={`btn-repeat-mic ${isListening ? 'listening' : ''}`}
+                  onClick={isListening ? stopListening : startListening}
+                  disabled={!isSupported || isEvaluatingRepeat}
+                >
+                  <Mic size={18} />
+                  <span>{isListening ? 'Stop Speaking' : 'Tap to Repeat Sentence'}</span>
+                </button>
 
-          {/* Repeat Result Banner */}
-          {repeatResult && (
-            <div
-              className={`repeat-result-banner ${
-                repeatResult.is_successful ? 'banner-success' : 'banner-retry'
-              }`}
-            >
-              <div className="banner-top">
-                {repeatResult.is_successful ? (
-                  <>
-                    <CheckCircle2 size={20} className="text-green" />
-                    <strong>Awesome Job! Accuracy: {Math.round(repeatResult.accuracy_score)}%</strong>
-                  </>
-                ) : (
-                  <>
-                    <XCircle size={20} className="text-red" />
-                    <strong>Let's Try Again. Accuracy: {Math.round(repeatResult.accuracy_score)}%</strong>
-                  </>
+                <input
+                  type="text"
+                  className="repeat-text-input"
+                  value={transcript || repeatText}
+                  onChange={(e) => {
+                    setRepeatText(e.target.value);
+                    if (transcript) resetTranscript();
+                  }}
+                  placeholder={`Repeat corrected sentence (${repsDoneCount + 1}/${repetitionsRequired})...`}
+                  disabled={isEvaluatingRepeat}
+                  aria-label="Repeat corrected sentence input"
+                />
+
+                <button
+                  type="button"
+                  className="btn-repeat-verify"
+                  onClick={handleRepeatSubmit}
+                  disabled={isEvaluatingRepeat || (!transcript.trim() && !repeatText.trim())}
+                >
+                  {isEvaluatingRepeat ? <RotateCw className="spin-icon" size={16} /> : <Check size={16} />}
+                  <span>Verify Repeat {sessionMode ? `(${repsDoneCount + 1}/${repetitionsRequired})` : ''}</span>
+                </button>
+              </div>
+            )}
+
+            {/* Repeat Result Banner */}
+            {repeatResult && (
+              <div
+                className={`repeat-result-banner ${
+                  repeatResult.is_successful ? 'banner-success' : 'banner-retry'
+                }`}
+              >
+                <div className="banner-top">
+                  {repeatResult.is_successful ? (
+                    <>
+                      <CheckCircle2 size={20} className="text-green" />
+                      <strong>Awesome Job! Accuracy: {Math.round(repeatResult.accuracy_score)}%</strong>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle size={20} className="text-red" />
+                      <strong>Let's Try Again. Accuracy: {Math.round(repeatResult.accuracy_score)}%</strong>
+                    </>
+                  )}
+                </div>
+                <p className="banner-feedback">{repeatResult.feedback}</p>
+                {repeatResult.remaining_mistake && (
+                  <p className="remaining-mistake-hint">{repeatResult.remaining_mistake}</p>
                 )}
               </div>
-              <p className="banner-feedback">{repeatResult.feedback}</p>
-              {repeatResult.remaining_mistake && (
-                <p className="remaining-mistake-hint">{repeatResult.remaining_mistake}</p>
-              )}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Action Footer: Next Situation */}
       <div className="feedback-footer">
-        <button className="btn-next-situation" onClick={onNextSituation}>
-          <span>Continue to Next Situation</span>
+        <button
+          className="btn-next-situation"
+          onClick={onNextSituation}
+          disabled={!canProceedToNext}
+          title={!canProceedToNext ? `Complete ${repetitionsRequired} repetitions to continue` : 'Move to next situation'}
+        >
+          <span>
+            {canProceedToNext
+              ? 'Continue to Next Situation'
+              : `Complete ${repetitionsRequired - repsDoneCount} more repetition(s) to continue`}
+          </span>
           <ArrowRight size={18} />
         </button>
       </div>

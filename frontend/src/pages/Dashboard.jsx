@@ -5,9 +5,10 @@ import { useTutor } from '../context/TutorContext';
 import { progressAPI, situationsAPI, learningAPI } from '../services/api';
 import { RobotTutor } from '../components/RobotTutor';
 import { DifficultyBadge } from '../components/DifficultyBadge';
+import { StreakCalendar } from '../components/StreakCalendar';
 import {
   Flame, Award, ArrowRight, Play, CheckCircle2, AlertOctagon,
-  TrendingUp, Sparkles, Clock, Target, Calendar
+  TrendingUp, Sparkles, Clock, Target, Calendar, Languages, MessageSquareText
 } from 'lucide-react';
 
 export function Dashboard() {
@@ -16,22 +17,25 @@ export function Dashboard() {
   const navigate = useNavigate();
 
   const [stats, setStats] = useState(null);
+  const [streakData, setStreakData] = useState(null);
   const [dailyChallenge, setDailyChallenge] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setRobotState(
       'GREETING',
-      `Welcome back${user?.full_name ? `, ${user.full_name}` : ''}! Ready to practice your spoken English today?`
+      `Welcome back${user?.full_name ? `, ${user.full_name}` : ''}! Choose Words & Expressions or Speaking Practice today.`
     );
 
     const loadData = async () => {
       try {
-        const [statsRes, challengesRes] = await Promise.all([
+        const [statsRes, streakRes, challengesRes] = await Promise.all([
           progressAPI.getStats(),
+          progressAPI.getStreak(),
           learningAPI.getDailyChallenges(),
         ]);
         setStats(statsRes.data);
+        setStreakData(streakRes.data);
         if (challengesRes.data && challengesRes.data.length > 0) {
           setDailyChallenge(challengesRes.data[0]);
         }
@@ -46,9 +50,11 @@ export function Dashboard() {
   }, [user, setRobotState]);
 
   const currentLevel = profile?.current_level || stats?.current_level || 'BEGINNER';
-  const dailyGoal = profile?.daily_goal_minutes || stats?.daily_goal_minutes || 20;
+  const dailyGoal = profile?.daily_goal_minutes || stats?.daily_goal_minutes || 15;
   const practicedToday = stats?.minutes_practiced_today || 0;
   const goalPercent = Math.min(100, Math.round((practicedToday / dailyGoal) * 100));
+  const currentStreak = streakData?.current_streak ?? stats?.streak_count ?? profile?.streak_count ?? 0;
+  const longestStreak = streakData?.longest_streak ?? stats?.longest_streak ?? profile?.longest_streak ?? 0;
 
   return (
     <div className="dashboard-page">
@@ -63,17 +69,19 @@ export function Dashboard() {
             Hello, <span className="highlight-name">{user?.full_name || user?.username || 'Learner'}</span>!
           </h1>
           <p className="hero-subtitle">
-            Practice real-life English speaking situations today. Get instant feedback on grammar, sentence formation, and natural expression.
+            Build confidence step-by-step through two independent guided learning modules led by your AI Tutor.
           </p>
 
           <div className="hero-actions">
-            <Link to="/situations" className="btn-primary-action">
-              <Play size={18} />
-              <span>Start Situation Practice</span>
+            <Link to="/words-expressions" className="btn-primary-action">
+              <Languages size={18} />
+              <span>Words & Expressions</span>
               <ArrowRight size={18} />
             </Link>
-            <Link to="/conversation" className="btn-secondary-action">
-              <span>Talk in AI Conversation Room</span>
+            <Link to="/situations" className="btn-secondary-action">
+              <MessageSquareText size={18} />
+              <span>Speaking Practice</span>
+              <ArrowRight size={18} />
             </Link>
           </div>
         </div>
@@ -83,18 +91,27 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Quick Metrics Bar */}
+      {/* Quick Metrics Bar (Strict Independent Module Metrics) */}
       <div className="metrics-grid">
         <div className="metric-card">
           <div className="metric-icon bg-blue">
-            <Target size={22} />
+            <Languages size={22} />
           </div>
           <div className="metric-details">
-            <span className="metric-label">Current Level</span>
-            <div className="metric-val-row">
-              <DifficultyBadge level={currentLevel} />
-            </div>
-            <span className="metric-subtext">Adapts automatically to performance</span>
+            <span className="metric-label">Words & Expressions</span>
+            <span className="metric-val">{stats?.words_completed_count ?? 0} Learned</span>
+            <span className="metric-subtext">{stats?.words_sessions_completed ?? 0} sessions completed</span>
+          </div>
+        </div>
+
+        <div className="metric-card">
+          <div className="metric-icon bg-green">
+            <MessageSquareText size={22} />
+          </div>
+          <div className="metric-details">
+            <span className="metric-label">Speaking Practice</span>
+            <span className="metric-val">{stats?.total_situations_completed ?? 0} Situations</span>
+            <span className="metric-subtext">{stats?.speaking_sessions_completed ?? 0} sessions completed</span>
           </div>
         </div>
 
@@ -104,21 +121,8 @@ export function Dashboard() {
           </div>
           <div className="metric-details">
             <span className="metric-label">Daily Streak</span>
-            <span className="metric-val">{profile?.streak_count || 1} Days</span>
-            <span className="metric-subtext">Practice daily to keep streak</span>
-          </div>
-        </div>
-
-        <div className="metric-card">
-          <div className="metric-icon bg-green">
-            <Clock size={22} />
-          </div>
-          <div className="metric-details">
-            <span className="metric-label">Daily Practice Goal</span>
-            <span className="metric-val">{practicedToday} / {dailyGoal} mins</span>
-            <div className="goal-progress-bar">
-              <div className="goal-fill" style={{ width: `${goalPercent}%` }} />
-            </div>
+            <span className="metric-val">{currentStreak} Days</span>
+            <span className="metric-subtext">Longest: {longestStreak} Days</span>
           </div>
         </div>
 
@@ -127,12 +131,17 @@ export function Dashboard() {
             <Award size={22} />
           </div>
           <div className="metric-details">
-            <span className="metric-label">Total Points</span>
-            <span className="metric-val">{profile?.total_points || 120} pts</span>
-            <span className="metric-subtext">{stats?.total_situations_completed || 0} situations completed</span>
+            <span className="metric-label">Level & Points</span>
+            <span className="metric-val">{profile?.total_points ?? stats?.total_points ?? 0} pts</span>
+            <div className="metric-val-row" style={{ marginTop: '4px' }}>
+              <DifficultyBadge level={currentLevel} />
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Daily Streak Activity Calendar */}
+      <StreakCalendar streakData={streakData} />
 
       {/* Main Content Split: Daily Challenge & Mistake Journal Overview */}
       <div className="dashboard-columns-grid">

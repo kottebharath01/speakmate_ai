@@ -40,9 +40,9 @@ export function Navbar({ onToggleSidebar }) {
         {/* Streak and Points Display */}
         {profile && (
           <div className="stats-badges-group">
-            <div className="nav-stat-pill streak-pill" title="Current Daily Practice Streak">
+            <div className="nav-stat-pill streak-pill" title={`Current Daily Streak (Longest: ${profile.longest_streak ?? 0})`}>
               <Flame size={16} className="flame-icon" />
-              <span>{profile.streak_count || 1} Day Streak</span>
+              <span>{profile.streak_count ?? 0} Day Streak</span>
             </div>
             <div className="nav-stat-pill points-pill" title="Total Practice Points">
               <Award size={16} className="star-icon" />

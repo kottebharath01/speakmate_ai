@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getLocalDateString } from '../utils/dateUtils';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -33,6 +34,19 @@ export const situationsAPI = {
   generate: (category, level) => api.post('/situations/generate', null, { params: { category, level } }),
   submit: (data) => api.post('/situations/submit', data),
   evaluateRepeat: (data) => api.post('/situations/repeat-evaluation', data),
+  // Guided Speaking Practice Sessions
+  getCategoryStats: () => api.get('/situations/categories/stats'),
+  startSession: (data) =>
+    api.post('/situations/sessions/start', {
+      ...data,
+      local_date: data?.local_date || getLocalDateString(),
+    }),
+  getActiveSession: () => api.get('/situations/sessions/active'),
+  getSession: (id) => api.get(`/situations/sessions/${id}`),
+  submitSessionAnswer: (id, data) => api.post(`/situations/sessions/${id}/submit`, data),
+  submitSessionRepeat: (id, data) => api.post(`/situations/sessions/${id}/repeat`, data),
+  abandonSession: (id) => api.post(`/situations/sessions/${id}/abandon`),
+  getSessionHistory: () => api.get('/situations/sessions/history'),
 };
 
 export const aiAPI = {
@@ -49,7 +63,10 @@ export const learningAPI = {
 };
 
 export const progressAPI = {
-  getStats: () => api.get('/dashboard-stats'),
+  getStats: (localDate) =>
+    api.get('/dashboard-stats', { params: { local_date: localDate || getLocalDateString() } }),
+  getStreak: (localDate) =>
+    api.get('/streak', { params: { local_date: localDate || getLocalDateString() } }),
   getRecords: () => api.get('/progress'),
   getMistakes: (isResolved) => api.get('/mistakes', { params: { is_resolved: isResolved } }),
   getAssessments: () => api.get('/assessments'),
@@ -61,7 +78,8 @@ export const interviewAPI = {
 };
 
 export const profileAPI = {
-  get: () => api.get('/profile'),
+  get: (localDate) =>
+    api.get('/profile', { params: { local_date: localDate || getLocalDateString() } }),
   update: (data) => api.put('/profile', data),
 };
 
@@ -77,6 +95,19 @@ export const wordsExpressionsAPI = {
   getExercises: (section, limit) => api.get('/words-expressions/exercises', { params: { section, limit } }),
   checkExercise: (data) => api.post('/words-expressions/check-exercise', data),
   checkSentence: (data) => api.post('/words-expressions/check-sentence', data),
+  // Guided Words & Expressions Sessions
+  getModesSummary: () => api.get('/words-expressions/modes/summary'),
+  startSession: (data) =>
+    api.post('/words-expressions/sessions/start', {
+      ...data,
+      local_date: data?.local_date || getLocalDateString(),
+    }),
+  getActiveSession: () => api.get('/words-expressions/sessions/active'),
+  getSession: (id) => api.get(`/words-expressions/sessions/${id}`),
+  submitSessionAnswer: (id, data) => api.post(`/words-expressions/sessions/${id}/answer`, data),
+  submitSessionRepeat: (id, data) => api.post(`/words-expressions/sessions/${id}/repeat`, data),
+  abandonSession: (id) => api.post(`/words-expressions/sessions/${id}/abandon`),
+  getSessionHistory: () => api.get('/words-expressions/sessions/history'),
 };
 
 export default api;

@@ -3,6 +3,7 @@ from app.models.entities import (
     User, LearningProfile, Situation, Lesson, Exercise,
     SentencePattern, Vocabulary
 )
+from app.database.situations_library import SITUATIONS_LIBRARY
 from app.core.security import get_password_hash
 
 def seed_database(db: Session):
@@ -24,9 +25,10 @@ def seed_database(db: Session):
             user_id=demo_user.id,
             current_level="BEGINNER",
             daily_goal_minutes=20,
-            streak_count=3,
+            streak_count=0,
+            longest_streak=0,
             target_focus="Spoken English & Real Situations",
-            total_points=120
+            total_points=0
         )
         db.add(profile)
         db.commit()
@@ -110,6 +112,14 @@ def seed_database(db: Session):
         for s in situations_data:
             db.add(Situation(**s))
         db.commit()
+
+    # Ensure expanded 15-category situation library is present
+    existing_titles = {row[0] for row in db.query(Situation.title).all()}
+    for s in SITUATIONS_LIBRARY:
+        if s["title"] not in existing_titles:
+            db.add(Situation(**s))
+            existing_titles.add(s["title"])
+    db.commit()
 
     # 3. Seed Sentence Patterns
     if db.query(SentencePattern).count() == 0:

@@ -28,18 +28,11 @@ export function AuthProvider({ children }) {
         console.warn('Token expired or invalid, logging out', err);
         localStorage.removeItem('speakmate_token');
         setUser(null);
+        setProfile(null);
       }
     } else {
-      // Auto-login as default learner for seamless local development
-      try {
-        const loginRes = await authAPI.login('learner@speakmate.ai', 'password123');
-        localStorage.setItem('speakmate_token', loginRes.data.access_token);
-        const userRes = await authAPI.getMe();
-        setUser(userRes.data);
-        await fetchProfile();
-      } catch (e) {
-        console.warn('Auto-login demo skipped', e);
-      }
+      setUser(null);
+      setProfile(null);
     }
     setLoading(false);
   };

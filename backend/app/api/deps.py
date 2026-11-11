@@ -18,10 +18,6 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     if not token:
-        # For convenience in local demo mode, fallback to demo user if no token provided
-        demo_user = db.query(User).filter(User.email == "learner@speakmate.ai").first()
-        if demo_user:
-            return demo_user
         raise credentials_exception
 
     try:

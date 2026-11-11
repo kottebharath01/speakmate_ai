@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime,
-    ForeignKey, Float, Enum, JSON
+    ForeignKey, Float, Enum, JSON, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from app.database.session import Base
@@ -41,6 +41,7 @@ class LearningProfile(Base):
     current_level = Column(String(50), default="BEGINNER")
     daily_goal_minutes = Column(Integer, default=15)
     streak_count = Column(Integer, default=0)
+    longest_streak = Column(Integer, default=0)
     last_practice_date = Column(DateTime, nullable=True)
     target_focus = Column(String(100), default="Spoken English & Real Situations")
     total_points = Column(Integer, default=0)
@@ -213,6 +214,7 @@ class PracticeAttempt(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     situation_id = Column(Integer, ForeignKey("situations.id"), nullable=True)
+    session_id = Column(Integer, ForeignKey("speaking_sessions.id"), nullable=True, index=True)
     original_answer = Column(Text, nullable=False)
     recognized_transcript = Column(Text, nullable=True)
     corrected_sentence = Column(Text, nullable=False)
@@ -222,8 +224,55 @@ class PracticeAttempt(Base):
     examples_json = Column(JSON, nullable=True)
     score = Column(Float, default=100.0)
     repeated_correctly = Column(Boolean, default=False)
+    repetition_required = Column(Boolean, default=False)
+    repetition_success_count = Column(Integer, default=0)
+    repetition_history_json = Column(JSON, nullable=True)
+    item_completed = Column(Boolean, default=False)
     attempt_type = Column(String(50), default="situation")  # situation, pattern, conversation, interview
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="practice_attempts")
     situation = relationship("Situation", back_populates="practice_attempts")
+
+
+class SpeakingSession(Base):
+    """Independent guided session for Module B: Speaking Practice."""
+    __tablename__ = "speaking_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    category = Column(String(100), nullable=False, default="All")
+    daily_target = Column(Integer, nullable=False, default=5)
+    completed_count = Column(Integer, default=0)
+    situation_ids_json = Column(JSON, nullable=False)
+    current_index = Column(Integer, default=0)
+    status = Column(String(50), default="active")  # active, completed
+    is_revision = Column(Boolean, default=False)
+    local_date = Column(String(20), nullable=False)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class UserSituationCompletion(Base):
+    """Prevents presenting already-completed speaking situations as new situations."""
+    __tablename__ = "user_situation_completions"
+    __table_args__ = (UniqueConstraint("user_id", "situation_id", name="uq_user_situation"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    situation_id = Column(Integer, ForeignKey("situations.id"), nullable=False, index=True)
+    completed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DailyActivity(Base):
+    """Tracks completed meaningful sessions per calendar date in user's local timezone."""
+    __tablename__ = "daily_activities"
+    __table_args__ = (UniqueConstraint("user_id", "activity_date", name="uq_user_activity_date"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    activity_date = Column(String(20), nullable=False, index=True)  # YYYY-MM-DD
+    words_sessions_completed = Column(Integer, default=0)
+    speaking_sessions_completed = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
